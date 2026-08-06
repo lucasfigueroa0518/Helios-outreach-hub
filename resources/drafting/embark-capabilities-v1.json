@@ -1,0 +1,194 @@
+[
+  {
+    "id": "financial_reporting_advisory",
+    "category": "strategic_finance_advisory",
+    "label": "Financial Reporting Advisory",
+    "exactSourceText": "Financial Reporting Advisory",
+    "sourcePage": 1,
+    "allowedSummary": "Financial reporting advisory support for accurate, compliant reporting."
+  },
+  {
+    "id": "pe_vc_portfolio_company_advisory",
+    "category": "strategic_finance_advisory",
+    "label": "PE/VC Portfolio Company Advisory",
+    "exactSourceText": "PE/VC Portfolio Company Advisory",
+    "sourcePage": 1,
+    "allowedSummary": "Advisory for PE/VC portfolio company finance needs."
+  },
+  {
+    "id": "office_of_the_cfo",
+    "category": "strategic_finance_advisory",
+    "label": "Office of the CFO",
+    "exactSourceText": "Office of the CFO",
+    "sourcePage": 1,
+    "allowedSummary": "Hands-on support for the Office of the CFO."
+  },
+  {
+    "id": "valuation",
+    "category": "strategic_finance_advisory",
+    "label": "Valuation",
+    "exactSourceText": "Valuation",
+    "sourcePage": 1,
+    "allowedSummary": "Valuation advisory support."
+  },
+  {
+    "id": "capital_markets",
+    "category": "strategic_finance_advisory",
+    "label": "Capital Markets",
+    "exactSourceText": "Capital Markets",
+    "sourcePage": 1,
+    "allowedSummary": "Capital markets advisory support."
+  },
+  {
+    "id": "esg_sustainability",
+    "category": "strategic_finance_advisory",
+    "label": "ESG & Sustainability",
+    "exactSourceText": "ESG & Sustainability",
+    "sourcePage": 1,
+    "allowedSummary": "ESG and sustainability reporting and compliance support."
+  },
+  {
+    "id": "deal_advisory",
+    "category": "strategic_finance_advisory",
+    "label": "Deal Advisory",
+    "exactSourceText": "Deal Advisory",
+    "sourcePage": 1,
+    "allowedSummary": "Deal advisory support around transactions."
+  },
+  {
+    "id": "interim_finance_leadership",
+    "category": "strategic_finance_advisory",
+    "label": "Interim Finance Leadership",
+    "exactSourceText": "Interim Finance Leadership",
+    "sourcePage": 1,
+    "allowedSummary": "Interim finance leadership for transitions and continuity."
+  },
+  {
+    "id": "m_and_a_activity",
+    "category": "operations_transformation",
+    "label": "M&A Activity",
+    "exactSourceText": "M&A Activity",
+    "sourcePage": 1,
+    "allowedSummary": "Support for M&A activity and related integration work."
+  },
+  {
+    "id": "digital_transformation",
+    "category": "operations_transformation",
+    "label": "Digital Transformation",
+    "exactSourceText": "Digital Transformation",
+    "sourcePage": 1,
+    "allowedSummary": "Digital transformation across people, process, and technology."
+  },
+  {
+    "id": "human_capital_transformation",
+    "category": "operations_transformation",
+    "label": "Human Capital Transformation",
+    "exactSourceText": "Human Capital Transformation",
+    "sourcePage": 1,
+    "allowedSummary": "Human capital transformation and workforce alignment."
+  },
+  {
+    "id": "supply_chain_operations",
+    "category": "operations_transformation",
+    "label": "Supply Chain & Operations",
+    "exactSourceText": "Supply Chain & Operations",
+    "sourcePage": 1,
+    "allowedSummary": "Supply chain and operations improvement support."
+  },
+  {
+    "id": "project_change_management",
+    "category": "operations_transformation",
+    "label": "Project & Change Management",
+    "exactSourceText": "Project & Change Management",
+    "sourcePage": 1,
+    "allowedSummary": "Project and change management support."
+  },
+  {
+    "id": "outsourcing",
+    "category": "operations_transformation",
+    "label": "Outsourcing",
+    "exactSourceText": "Outsourcing",
+    "sourcePage": 1,
+    "allowedSummary": "Outsourcing support for finance and back-office work."
+  },
+  {
+    "id": "team_continuity",
+    "category": "operations_transformation",
+    "label": "Team Continuity",
+    "exactSourceText": "Team Continuity",
+    "sourcePage": 1,
+    "allowedSummary": "Team continuity support when capacity is constrained."
+  },
+  {
+    "id": "embedded_project_execution_support",
+    "category": "operations_transformation",
+    "label": "Embedded Project Execution Support",
+    "exactSourceText": "Embedded Project Execution Support",
+    "sourcePage": 1,
+    "allowedSummary": "Embedded project execution support alongside client teams."
+  },
+  {
+    "id": "data_analytics_automation",
+    "category": "technology_innovation",
+    "label": "Data Analytics & Automation",
+    "exactSourceText": "Data Analytics & Automation",
+    "sourcePage": 2,
+    "allowedSummary": "Data analytics and automation to improve finance operations."
+  },
+  {
+    "id": "generative_ai",
+    "category": "technology_innovation",
+    "label": "Generative AI",
+    "exactSourceText": "Generative AI",
+    "sourcePage": 2,
+    "allowedSummary": "Generative AI enablement for practical business use."
+  },
+  {
+    "id": "technology_enablement",
+    "category": "technology_innovation",
+    "label": "Technology Enablement",
+    "exactSourceText": "Technology Enablement",
+    "sourcePage": 2,
+    "allowedSummary": "Technology enablement and process improvement."
+  },
+  {
+    "id": "internal_controls_risk_management",
+    "category": "internal_controls_risk",
+    "label": "Internal Controls & Risk Management",
+    "exactSourceText": "Internal Controls & Risk Management",
+    "sourcePage": 2,
+    "allowedSummary": "Internal controls and risk management support."
+  },
+  {
+    "id": "prepare_for_audits_and_ipos",
+    "category": "strategic_finance_advisory",
+    "label": "Prepare for audits and IPOs",
+    "exactSourceText": "Prepare for audits and IPOs",
+    "sourcePage": 1,
+    "allowedSummary": "Help clients prepare for audits and IPOs."
+  },
+  {
+    "id": "optimize_financial_operations",
+    "category": "strategic_finance_advisory",
+    "label": "Optimize financial operations",
+    "exactSourceText": "Optimize financial operations",
+    "sourcePage": 1,
+    "allowedSummary": "Help clients optimize financial operations."
+  },
+  {
+    "id": "modernize_tech_and_data",
+    "category": "technology_innovation",
+    "label": "Modernize tech and data",
+    "exactSourceText": "Modernize tech and data",
+    "sourcePage": 1,
+    "allowedSummary": "Help clients modernize tech and data."
+  },
+  {
+    "id": "scale_with_confidence",
+    "category": "operations_transformation",
+    "label": "Scale with confidence",
+    "exactSourceText": "Scale with confidence",
+    "sourcePage": 1,
+    "allowedSummary": "Help clients scale with confidence."
+  }
+]

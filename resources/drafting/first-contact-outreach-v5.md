@@ -1,0 +1,90 @@
+---
+name: first-contact-outreach
+description: Writes first-contact email between professionals by reading the sociology of the situation rather than applying sales technique. Takes two inputs, the sender and the prospect, plus the context connecting them, and produces outreach a thoughtful human in the sender's world would actually send. Use whenever the user wants to draft, rework, or judge a cold email, warm introduction, networking note, BD or partnership approach, founder-to-investor note, or any first message to a specific professional, whether the situation is rich with context or nearly bare, even phrased casually as "help me reach out to X" or "write an email to this partner."
+---
+
+# First-contact outreach
+
+## What this is
+
+This skill writes the first email one professional sends another. It is a sociology skill, not a sales skill: persuasion frameworks, funnel language, and copywriting technique are the failure modes it exists to prevent. What it applies instead is an understanding of how educated white-collar professionals recognize one another and decide whom to trust.
+
+The organizing idea: before a senior reader asks "can this person help me?", they ask "does this person belong in my world?", and they never reach the first question if the second fails. Optimize for belonging, not persuasion. The bar is a seasoned practitioner's output: given the real situation, the note a thoughtful human in the sender's position would send, indistinguishable from one. Situations will arrive at every level of richness, from a named reader with shared history and a live event down to a role, a region, and little else. Adapt to what the situation provides; never fit the situation to a form of email.
+
+## The gate
+
+A senior professional triages unknown mail in seconds, and the triage is a sort: person or campaign, insider or outsider, peer or vendor. The sort runs on signals rather than claims. Register, formatting, what the sender takes for granted, and the shape of the ask are all read before the content is. Mail sorted as campaign or vendor is dead no matter what it offers; its merits are never evaluated.
+
+Two consequences. First, the work is mostly analysis. Belonging cannot be faked with insider-sounding phrases, because fluency is read at the level of unconscious mastery, and mimicry produces small errors a native notices at once. The only reliable way through the gate is to understand both worlds well enough that the fluency is real. Second, one detected technique reprices the whole email. A reader who can name the move ("assumptive close," "fake observation") stops believing every sentence around it.
+
+## Read before writing
+
+Do five readings before drafting a word. Situations arrive rich and arrive thin, and thin is a normal working condition, not a defect to fix before writing: research what can be researched, and save questions for what only the user can supply, usually the sender's side (position, voice, what they can honestly stand behind). Never invent a specific. A wrong insider detail fails the gate on its own, and a fabricated "I noticed..." is worse than no personalization at all.
+
+**The prospect's world.** What their week actually contains. The pressures and constraints that shape their decisions: regulatory, structural, seasonal, political. Who else writes to them uninvited and what that mail looks like, because this email gets sorted against it. The contact norms of their world: some industries do business over meals, some over short calls, some only through introductions. The register their world speaks. Depth here is what makes an email land as insider rather than generic; it is the one input that cannot be thin, and it carries the most weight exactly when the individual reader is barely known, because fluency in their world is what a thin situation still lets the email earn.
+
+**The sender's position.** Where they sit in fact, what they can claim without inflation, what they can genuinely stand behind, and how they sound. Write nothing the sender cannot live up to in the reply, the meeting, and the relationship after it. Sender-side facts are provided, never inferred: everything the email states or implies about the sender's organization, its footprint, headquarters, size, specialties, or history, comes only from materials the user supplied or statements the user made. Never derive the organization's geography from the individual sender's location, title, or territory; a person based in one region does not make the firm regional. When an organizational fact would strengthen the email but is not in the provided material, ask or omit, never fill.
+
+**The status geometry.** The real relation between the two people: peer to peer, junior to senior, unknown to established, principals of adjacent worlds. The reader assigns the sender a role within the first two lines and reads everything after through it. Each geometry has an honest posture. A junior writer does not fake peerhood: deference performed correctly, a small specific ask, and curiosity about the senior person's experience form a recognized, legitimate approach, often carried by shared tribe (a school, a former firm, a common world). Peers do not perform deference: they are direct, name the mutual ground, and propose the social forms of their shared world. The one role that fails at every rung is vendor, the person whose interest in the reader is the reader's budget.
+
+**The structural relation.** How the two worlds relate: competing, complementary, or adjacent. The contact always has a business motive, and this reading's job is to locate why a working relationship could plausibly make sense; the email never dresses commercial outreach as social curiosity. The strongest reasons for contact usually live in this structure rather than in any pitch: a constraint on the reader's side that creates needs they cannot serve themselves, a boundary both sides share, a third party both touch. Where tension is plausible (competition, conflict of interest), name it plainly and early. Naming the elephant is an insider move; pretending it is not in the room is an outsider one.
+
+**The reason and its resolution.** Why this reader, why now, from this sender. A real reason exists in almost every situation, but at different resolutions: the person (a shared tie, a live event, something they wrote), the company (a project, a filing, a transition), the role or segment (what a given role or segment is dealing with in the current period), the moment (planning season, a deadline the whole industry shares), or the structure between the two worlds. Climb to the highest resolution the input honestly supports, and climb seriously; person-level ground often sits unnoticed in the material provided. Honesty is not the only test a detail must pass; weight is the other. A detail earns the center of the email only if the reader themselves would find it significant, and the test is whether they would think "that is a sensible reason for someone to contact me now" rather than "why is this stranger making so much of that?" Importance is assigned by the reader's world, not by the detail's rarity in the research. A minor specific can season an email; it cannot anchor one. And the energy the email gives a detail must match the energy the reader's world gives it, because the mismatch is what reads as dramatic. Then write the whole email at the resolution where you land: claims, warmth, and everything the email assumes about the reader must match it. Resolution is terrain, not a grade. A segment email that knows exactly what it does not know beats a person-level email built on faked intimacy, and openly not knowing the reader's specifics while knowing their world cold is itself a belonging signal, so below person level let the email carry that posture without apology. Merge-field first names and compliments on a recent post are not resolution; they are the residue of campaigns. Abort only at true zero, no fluency, no structure, no timing, nothing honest to stand on, and if that ever arrives, say so rather than write filler.
+
+## The signal economy
+
+Trust moves through signals that are costly to fake, and it is destroyed by signals that are cheap.
+
+Claims are cheap. "Leading platform," "vetted network," "trusted by hundreds of clients" cost nothing to type, so they carry no information except that the sender talks like a marketer. Demonstrated fluency is costly: knowing the specific constraint currently governing the reader's decisions, using their world's compressed shorthand correctly, anticipating the objection they would raise. Convert every claim of quality into a demonstration or cut it.
+
+Restraint signals status. People with options do not push. No urgency, no pressure, no guilt, and a "no" that costs the reader nothing. The email should read as if the sender's week is full either way. The less an email needs the reply, the more likely it earns one.
+
+The email exists to begin a relationship, and a relationship begins as a conversation, so the ask never needs to be paid for, staged, or justified with offered value. What earns it is the quality of attention the email demonstrates: a real reading of the reader's situation and an honest reason for writing. Promised value is not attention. Offering insights, perspectives, or materials as the price of a meeting converts the email into a pitch and the sender into a vendor. The posture is confident and humble at once: confident that a conversation between these two people is worth having, humble in claiming nothing beyond the reason itself. Asks still fail when they treat the reader as a resource to mine rather than a person to know: the discovery call to learn how the reader currently handles something, the request that readers qualify themselves, the referral request from a stranger.
+
+Autonomy is the senior reader's currency. They have seen every close and notice pressure the way an editor notices typos. Leave them in full control of whether anything happens next.
+
+On warm introductions: borrowed trust raises the bar, it does not lower it. The introducer's reputation now rides on the email, and the reader will judge the introducer by it. Honor the tie in a social register first, which means the reason this introduction made sense to the person who made it, and keep the commercial note lighter than a cold one could be.
+
+## The vendor pattern
+
+These moves flip the sort to campaign. They are descriptions of what fires the reader's pattern matcher, not rules to invert; the deeper principle is that any move the reader can name has already failed.
+
+Fake intimacy in the opening ("Hope you're having a great morning!"). Self-praise epithets ("a leading..."). The fake observation ("I've noticed many companies in your industry..."), which claims sight while confessing blindness. The self-flattering close ("let's compare notes," "happy to share our perspective," "walk you through what we're seeing"), which prices the sender's own opinions as the reward for meeting; the sender flatters themselves and calls it generosity. The peer-benchmarking close ("if it would be useful to talk through what other finance teams are prioritizing," "trade perspectives on how other finance leaders are handling this," "compare where Embark has helped similar operators") is the same move wearing a different coat: it claims the sender personally holds cross-client insight as the bait for the call. The sender's organization may have that experience; the individual writing rarely does, and the email must never lend the writer knowledge that is not theirs to offer. Asking readers to qualify themselves ("Is this something you handle?") or to educate the sender about their own operation. Manufactured exclusivity or urgency. The presumptive close ("let me know what time works best"). The referral fallback ("if not, who should I speak with?"). Announcing brevity instead of being brief. Guilt loops ("if you could let me know either way"). Marketing formatting: bullets, bolding, numbered value propositions, links as proof, cold calendar links, testimonial counts. Long signatures with sales titles, and any unsubscribe apparatus, which declare in writing that this is a campaign.
+
+## Writing it
+
+Form is a signal before a sentence is parsed. First contact between professionals is short plain paragraphs in one consistent register: one idea, one reason, one ask. Peers write paragraphs; marketers format.
+
+Subject lines: follow the Subject line system block. Do not invent a second subject doctrine here.
+
+Where to begin depends on geometry. A junior writer names themselves and their claim to attention early, because the reader needs the frame. Between peers, open on the shared ground or the reason itself; a paragraph of autobiography before the point reads as a pitch deck. Peerhood is granted by the reader, never claimed by the sender; when the geometry is uncertain, write from one honest step below, because modesty from a true peer costs little while presumed equality from anyone else fails the gate. Wherever it starts, the reason for writing should be unmistakable within the first two or three sentences.
+
+The ask is a conversation. Its forms are a meal, a call, or a simple reply, in whatever shape the reader's world prefers, and that is the whole menu. Own the motive: the sender is writing because a working relationship might make sense, the reader knows it, and the email never pretends otherwise, so nothing like "no ask here, just wanted to introduce myself" survives. Attach nothing to the ask: no agenda, no promised insight, no performance to justify it. One ask, concrete enough to answer in a sentence, phrased so declining costs nothing. Close without summarizing, restating value, or pushing. Never close on "if you'd be willing to exchange notes" or its swapping and trading variants; it is not a thing a person says. Keep the signature minimal: name, role if it orients, nothing that sells.
+
+Deliver one email, well read, rather than variants. Offer alternatives only when the geometry genuinely forks and the user must choose a posture.
+
+## The prose
+
+The writing carries as much signal as the content, and none of it can read as machine text.
+
+The em dash pause is the loudest single tell; do not use it. Alongside it: rule-of-three cadence, balanced antithesis ("this isn't X, it's Y"), hollow intensifiers ("truly," "incredibly," "seamlessly"), uniform sentence rhythm, the tidy summarizing close, and greeting-card filler ("I hope this finds you well"). None of it survives.
+
+Word-level bans: when the email refers to the sender's own team or employees, do not call them "people"; write professionals, colleagues, the team, or the specific role. Never refer to Embark as a "group"; use Embark, the firm, the practice, or the team. Never use the word "trade" in the ask, close, or CTA.
+
+More important than any single tell is calibration. Tune vocabulary, formality, warmth, and sentence rhythm to these two specific people. A founder writing an investor and a services principal writing an audit partner should not share a sentence between them: one world runs compressed and casual, tolerates fragments, and reads polish as inauthentic; the other runs measured and hedged and reads slang as unserious. The target register is the overlap of the reader's world and the sender's true voice. Where the two conflict, take formality from the reader's world and voice from the sender.
+
+Write with human irregularity: sentences of unequal length, plain verbs, concrete nouns, contractions where the register allows, and one thought permitted an extra sentence because it matters. Long sentences are acceptable. Overloaded sentences are not. If a sentence stacks multiple clauses, appositions, or project details so that it takes a second read to parse, split it into separate sentences.
+
+Do not pack a program name, multiple project details, and a qualifying clause into one sentence. Do not stack appositions after a comma. Put each idea in its own short sentence. Self-introductions must use one clean sentence for who you are and where you work. Do not chain titles, employers, and qualifiers with commas.
+
+Also strip humility theater and self-sabotage: never write "I don't know…", "I won't guess…", or "we don't have a track record in…". If a detail is unknown or unsupported, omit it. Naming a real conflict of interest is not the same as inventing an industry-gap apology.
+
+The finished email must pass two tests. A thoughtful, busy human in the sender's position could have sent it. And nothing in it pretends to know the reader better than the sender does.
+
+## Working method
+
+Gather the two buckets: the sender (who they are, where they sit, what they can stand behind, how they sound) and the prospect (who they are, their world, its pressures and norms), plus the context connecting them. Ask briefly only for what the email cannot do without and only the user can supply; a thin prospect side is a working condition, not a blocker. Do the five readings. Draft in the calibrated register, at the resolution the reading found. Then strip: every sentence either carries the reason or carries belonging, anything that claims, pressures, or pads comes out, and anything that implies knowledge the sender does not have comes out with it, and anything that makes more of a detail than the reader's world would comes out as well. Last, read it as the recipient will, in their inbox against everything else that arrived that day, and ask which pile it lands in. Deliver the email; if one obtainable fact would meaningfully raise its resolution, say so afterward instead of blocking on it.
+
+When asked to judge or repair an existing draft, run the same readings on it and name the signals it is sending before touching a word.
+
+The readings are the skill. Every tactic above is situational; the moment one becomes "the move," it has become a template, and templates are what the gate exists to catch.

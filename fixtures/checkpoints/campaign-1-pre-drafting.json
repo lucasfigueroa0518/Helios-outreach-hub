@@ -1,0 +1,549 @@
+{
+  "saved_at": "2026-07-16T19:39:16.936Z",
+  "phase": "pre_drafting_review",
+  "campaign_id": "761fe6e1-a239-41dc-b4f8-d3482d73e950",
+  "lead_count": 50,
+  "mailbox_valid_count": 17,
+  "runs": [
+    {
+      "id": "6d39c0c1-d0fc-4138-be3b-069dd48b46d7",
+      "status": "uploading",
+      "started_at": "2026-07-16 17:41:52.847106+00"
+    },
+    {
+      "id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "status": "complete",
+      "started_at": "2026-07-16 17:41:53.349128+00"
+    }
+  ],
+  "leads": [
+    {
+      "lead_id": "37051225-2b43-4d88-a636-37fa593551ec",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Alena Dmyterko",
+      "email_primary": "alena@ryder.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Ryder System, Inc.",
+      "title": "Director of Accounting"
+    },
+    {
+      "lead_id": "6bcaff6b-1401-4f32-817b-fb67196005ee",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Alexander J. Habash, ...",
+      "email_primary": null,
+      "email_status": "not_found",
+      "email_verification": null,
+      "company_name": "The Service Companies",
+      "title": "Director of Financial Planning and Analysis"
+    },
+    {
+      "lead_id": "7dc1ccbd-ee04-446b-aad8-6e8355803a14",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Andrea Carter",
+      "email_primary": "acarter@pcibrands.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Postal Center International / PCI",
+      "title": "Vice President of Accounting"
+    },
+    {
+      "lead_id": "439b2bce-5180-499b-9300-0d5d9291c35c",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Andres Rovirosa",
+      "email_primary": "arovirosa@petpev.com",
+      "email_status": "direct",
+      "email_verification": "valid",
+      "company_name": "Port Everglades Terminal LLC",
+      "title": "Vice President, Finance/Accounting"
+    },
+    {
+      "lead_id": "05646a3a-9e61-4b97-8d73-a1635dca1053",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Bruno Barros",
+      "email_primary": null,
+      "email_status": "not_found",
+      "email_verification": null,
+      "company_name": null,
+      "title": "Corporate Controller"
+    },
+    {
+      "lead_id": "ede19d99-800b-4930-897f-f21a48bff8f4",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Christopher Fries",
+      "email_primary": "christopher.fries@icims.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Seminole Hard Rock Support Services",
+      "title": "Director of Financial Planning and Analysis"
+    },
+    {
+      "lead_id": "a9329594-3a03-41a7-9315-7a8b40157065",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Dan Maxwell",
+      "email_primary": "dan@solutionsbyfusion.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "Fusion Logistics, Inc.",
+      "title": "Vice President, Operational Finance"
+    },
+    {
+      "lead_id": "024d5e0b-ff25-4516-92a9-d7622c0ed917",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "David Schoenberger",
+      "email_primary": "dschoenberger@celistics.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "CELISTICS",
+      "title": "Group CFO"
+    },
+    {
+      "lead_id": "97605e71-5284-451c-91b1-13aabb683fb4",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Debbie Archer",
+      "email_primary": "debbie.archer@bluegreenvacations.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "Bluegreen Vacations",
+      "title": "Director of Accounting, Financial Services"
+    },
+    {
+      "lead_id": "5360c203-17d9-4237-a2eb-ed78b725d45c",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Eduardo Bassan",
+      "email_primary": "eduardo.bassan@aboardtheworld.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "The World",
+      "title": "Senior Director Financial Planning Analysis"
+    },
+    {
+      "lead_id": "12f3ccc7-8d17-4834-9da2-8e2789ceff45",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Emily Baumhauer",
+      "email_primary": "emily@ryder.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Ryder System, Inc.",
+      "title": "Director of Finance"
+    },
+    {
+      "lead_id": "2011eef2-86bf-4095-87d3-afdfd164a92e",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Eric Edwards",
+      "email_primary": "eedwards@jwturnberry.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "JW Marriott Miami Turnberry Resort & Spa",
+      "title": "Director Of Finance And Accounting"
+    },
+    {
+      "lead_id": "f784454f-595e-44f1-a72c-ec824d6d655c",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Franco Da Costa Gomez",
+      "email_primary": "franco.dacostagomez@kingocean.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "King Ocean Services",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "aceb633c-92c1-44a2-9081-bced8569c23d",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Gary Smith",
+      "email_primary": "gary.smith@gobrightline.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Brightline Trains",
+      "title": "Chief Accounting Officer"
+    },
+    {
+      "lead_id": "ad2ec465-1546-44a9-8bb5-23d4949efe39",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Gil Sternbach",
+      "email_primary": "gil.sternbach@worldtravelholdings.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "World Travel Holdings",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "7892ce05-382a-4e89-9065-1f02b425b42a",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Harvey Grunwald",
+      "email_primary": "hgrunwald@gleneagles.cc",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Gleneagles Country Club",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "549c05ec-aacd-4b65-abe6-5fc17ba4e3c6",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Heather Enderby",
+      "email_primary": "heather.enderby@gobrightline.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Brightline Trains",
+      "title": "CFO"
+    },
+    {
+      "lead_id": "fbc64e80-72b5-4b43-96eb-b2bce8d233de",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Hugo A. Rodriguez",
+      "email_primary": "harodriguez@acqualinaresort.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Acqualina Resort & Residences on the Beach",
+      "title": "Financial Controller"
+    },
+    {
+      "lead_id": "9751807c-d65c-400c-8187-f6854ca7c246",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Iraq Pacheco",
+      "email_primary": null,
+      "email_status": "not_found",
+      "email_verification": null,
+      "company_name": null,
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "bd0bb1a2-2ee4-45fa-88be-80c7d81ac983",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Jack Portlock",
+      "email_primary": "jack@gatelesis.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "GA Telesis",
+      "title": "CFO"
+    },
+    {
+      "lead_id": "b4a29b6f-d203-4350-ab9a-15f9d5caa6d7",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Jacqueline Bolanos, M...",
+      "email_primary": null,
+      "email_status": "not_found",
+      "email_verification": null,
+      "company_name": "Areas USA",
+      "title": "Director Of Accounting"
+    },
+    {
+      "lead_id": "155881d3-6604-49b1-a327-513e76a70f38",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "James Ipock",
+      "email_primary": "jipock@tbccorp.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "TBC Corporation",
+      "title": "Vice President of Tax and Asset Management"
+    },
+    {
+      "lead_id": "2a393e73-5b2b-49e4-927c-b56f3c1121a8",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Jason Anderson",
+      "email_primary": "jason.anderson@icims.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Seminole Hard Rock Support Services",
+      "title": "Director of Financial Analysis"
+    },
+    {
+      "lead_id": "1090920d-c454-4cf2-af6f-b292023bc80e",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Jennifer Hemingway",
+      "email_primary": "jennifer.hemingway@warbirdmarineholdings.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "Warbird Marine Holdings LLC",
+      "title": "Senior Director, Finance / Vice President, Finance"
+    },
+    {
+      "lead_id": "50215ada-61eb-4468-8677-88948dfffdc1",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Joel Martin",
+      "email_primary": null,
+      "email_status": "not_found",
+      "email_verification": null,
+      "company_name": "Seaboard Marine",
+      "title": "Director of Accounting"
+    },
+    {
+      "lead_id": "a13be353-a64c-451f-8a48-db5d07aa8953",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Jorge Cabrera Jr.",
+      "email_primary": "jorge.cabrera@thebreakers.com",
+      "email_status": "direct",
+      "email_verification": "valid",
+      "company_name": "The Breakers Palm Beach",
+      "title": "Senior Vice President- Accounting, Technology & Supply Chain"
+    },
+    {
+      "lead_id": "077a444c-d1d3-48ae-a516-fe15a0c45b61",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Joshua Adams",
+      "email_primary": "joshua.adams@gulfstreampark.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Gulfstream Park",
+      "title": "Vice President Finance"
+    },
+    {
+      "lead_id": "68533420-765d-409a-b6df-8e5d115f5aed",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Katharine Campbell",
+      "email_primary": "kcampbell@bocawestcc.org",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Boca West Country Club, Inc.",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "3182f68d-c20f-4318-81f4-5133b75b58b6",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Kelly Chandler",
+      "email_primary": "kchandler@oceanreef.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Ocean Reef Club",
+      "title": "Executive Director of Finance"
+    },
+    {
+      "lead_id": "c7bd296e-a7be-4314-a9a1-8960f2568071",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Kristie Defontaine",
+      "email_primary": null,
+      "email_status": "not_found",
+      "email_verification": null,
+      "company_name": null,
+      "title": "Director of Financial Planning and Analysis"
+    },
+    {
+      "lead_id": "7ffef027-7b8f-4882-97f7-5ee79470b44c",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Kristina Cooper",
+      "email_primary": "kristinacooper@travelmation.net",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Travelmation LLC - Sirena Wuerfele - Specializing in Disney Vacations and More!",
+      "title": "Vice President of Finance/Administration"
+    },
+    {
+      "lead_id": "99780ede-ab97-4aeb-a418-38230f8c2d33",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Lauren Rotmil",
+      "email_primary": "lauren@ryder.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "Ryder System, Inc.",
+      "title": "Director of Lease Accounting"
+    },
+    {
+      "lead_id": "52fe696e-5a2d-4bd5-a4e2-0da1578d9a46",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Mark Odom",
+      "email_primary": "mark.odom@pgaresort.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "PGA National Resort",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "5458a38b-7328-408b-b9a7-cebfb0ca1e6b",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Matthieu Dewavrin",
+      "email_primary": "mdewavrin@tbccorp.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "TBC Corporation",
+      "title": "Senior Director Finance"
+    },
+    {
+      "lead_id": "62e12198-9fe1-465e-b03f-c1f36638e8bf",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Michele Riley",
+      "email_primary": "mriley@jetstreamgs.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Jetstream Ground Services",
+      "title": "Director of Finance"
+    },
+    {
+      "lead_id": "62323a47-89ab-47a6-b257-9298b11bbdb1",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Miguel Garriga Solsona",
+      "email_primary": "miguel.garrigasolsona@areas.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "Areas USA",
+      "title": "Sr. Director of Financial Planning and Analysis"
+    },
+    {
+      "lead_id": "3bbd5247-8ebd-483e-bcc2-3947429fdaa8",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Mike Crawford",
+      "email_primary": "mcrawford@tbccorp.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "TBC Corporation",
+      "title": null
+    },
+    {
+      "lead_id": "8f5c1778-8c5c-4b45-9d90-cd20a011c864",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Mike Sommers",
+      "email_primary": "m.sommers@stsaviationgroup.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "STS Engineering Solutions",
+      "title": "CFO"
+    },
+    {
+      "lead_id": "6bcd8004-7fcc-4d8f-bbc3-c678b4869538",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Nada Yared",
+      "email_primary": "n.yared@nauticalventures.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Nautical Ventures",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "3a1d54bc-6867-4a9d-8e22-13fa35271d44",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Nichole McCarthy",
+      "email_primary": "nichole.mccarthy@driftwoodhospitality.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "Driftwood Hospitality Management",
+      "title": "Director of Finance And Accounting"
+    },
+    {
+      "lead_id": "61564622-529c-4c00-a600-872eae79ba47",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Oscar Cabrera",
+      "email_primary": "oscar.cabrera@summitmro.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Summit Aerospace",
+      "title": "CFO"
+    },
+    {
+      "lead_id": "a1aaf0d5-85a3-412d-a47b-e2f4de0ce35b",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Pat Sorensen",
+      "email_primary": "psorensen@brokensoundclub.org",
+      "email_status": "direct",
+      "email_verification": "valid",
+      "company_name": "Broken Sound Club(+2)",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "7b017776-cb10-4d0a-8a28-6fb99b498d36",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Peter Schubert",
+      "email_primary": "pschubert@carnival.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Carnival Corporation",
+      "title": "Vice President, Global Financial Technology Services"
+    },
+    {
+      "lead_id": "e1aee87d-dbbb-47aa-811f-15d39255ae5d",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Rachel Barron",
+      "email_primary": "rachel.barron@pinnaclehm.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Pinnacle Hotel Management",
+      "title": "Corporate Director of Finance"
+    },
+    {
+      "lead_id": "814301a9-75e5-458b-806f-0a01b369d4f2",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Richard Crai",
+      "email_primary": "richard.crai@ibcinc.com",
+      "email_status": "inferred",
+      "email_verification": "unknown",
+      "company_name": "IBC | Solutions for Smarter Logistics",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "1173c213-be13-4bd0-a787-1a73c82d5ebf",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Richard Johnson",
+      "email_primary": "richard@nikkibeach.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Nikki Beach Hospitality Group",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "12fc4b0f-88dc-45e5-9a3c-fd94d6503820",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Sam Logan",
+      "email_primary": "sam_logan@islandhospitality.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Island Hospitality Management",
+      "title": "Vice President Risk Management"
+    },
+    {
+      "lead_id": "fc94ba4d-e5b8-45f7-bb7e-184e4647dce7",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Sergio Hedding",
+      "email_primary": "shedding@linkhospitalitycorp.com",
+      "email_status": "inferred",
+      "email_verification": "valid",
+      "company_name": "Link Hospitality Corp | Staffing Services",
+      "title": "Chief Financial Officer"
+    },
+    {
+      "lead_id": "f6de3a4b-62c5-40d3-8b7c-3f48fd289e1f",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Susan Gershon",
+      "email_primary": "susan_gershon@islandhospitality.com",
+      "email_status": "inferred",
+      "email_verification": "invalid",
+      "company_name": "Island Hospitality Management",
+      "title": "Vice President of Internal Audit"
+    },
+    {
+      "lead_id": "2f669fad-7897-42a3-95d0-4eb29c04b125",
+      "run_id": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+      "full_name": "Tien Nguyen",
+      "email_primary": null,
+      "email_status": "not_found",
+      "email_verification": null,
+      "company_name": "HALO AirFinance",
+      "title": "Director"
+    }
+  ],
+  "campaign_name": "Campaign #1",
+  "campaign_status": "active",
+  "drafting_wiped_on_save": {
+    "workspace_id": null,
+    "deleted": {
+      "resolutions": 0,
+      "jobs": 0,
+      "drafts": 0,
+      "packets": 0,
+      "run_items": 0,
+      "items": 0,
+      "runs": 0,
+      "workspaces": 0
+    }
+  },
+  "live_drafting_providers": {
+    "ready": true,
+    "draftingMode": "live",
+    "anthropicKeyPresent": true,
+    "researchProviderReady": true,
+    "writerProviderReady": true,
+    "assetsLoadable": true,
+    "researchModel": "claude-sonnet-5",
+    "writerModel": "claude-sonnet-5",
+    "providerModulesPresent": true,
+    "blockers": []
+  },
+  "note": "Review-phase checkpoint with live drafting providers wired. Use `reset` with this campaign name/id to hard-delete drafting again without touching enrichment."
+}

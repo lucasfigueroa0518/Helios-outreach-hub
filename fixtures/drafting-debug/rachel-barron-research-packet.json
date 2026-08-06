@@ -1,0 +1,332 @@
+{
+  "asOf": "2026-07-22T15:00:00.000Z",
+  "sources": [
+    {
+      "id": "s1",
+      "url": "https://www.zoominfo.com/p/Rachel-Barron/4301559857",
+      "quote": "Rachel Barron is the Director of Finance at Pinnacle Hotel Management... Previously at Marriott, Rachel served as Senior Assistant Director, Finance & Accounting",
+      "title": "Contact Rachel Barron, Email: r***@pinnaclehm.com & Phone Number | Director, Finance at Pinnacle Hotel Management - ZoomInfo",
+      "family": "data_broker",
+      "trustTier": "low",
+      "accessedAt": "2026-06-15",
+      "bindsPerson": true,
+      "publishedOrUpdated": null
+    },
+    {
+      "id": "s3",
+      "url": "https://www.datanyze.com/companies/pinnacle-hotel-management/225264449",
+      "quote": "Pinnacle Hotel Management headquarters are located in 1480 Royal Palm Beach Blvd Ste A, West Palm Beach, Florida, 33411, United States",
+      "title": "Pinnacle Hotel Management Company Profile | Management and Employees List",
+      "family": "data_broker",
+      "trustTier": "medium",
+      "accessedAt": "2026-06-15",
+      "bindsPerson": false,
+      "publishedOrUpdated": null
+    },
+    {
+      "id": "s4",
+      "url": "https://pinnaclehotelmanagement.com/about-us/",
+      "quote": "Felicia Matula joined Pinnacle in 1999 and is the Chief Financial Officer.",
+      "title": "About us – Pinnacle Hotel",
+      "family": "company_press",
+      "trustTier": "high",
+      "accessedAt": "2026-06-15",
+      "bindsPerson": false,
+      "publishedOrUpdated": null
+    },
+    {
+      "id": "s6",
+      "url": "https://www.linkedin.com/company/pinnacle-hotel-management",
+      "quote": "We will provide third party management and complete all aspects of your monthly Financial Statements.",
+      "title": "Pinnacle Hotel Management | LinkedIn",
+      "family": "other",
+      "trustTier": "medium",
+      "accessedAt": "2026-06-15",
+      "bindsPerson": false,
+      "publishedOrUpdated": null
+    },
+    {
+      "id": "s7",
+      "url": "https://www.royalpalmbeachfl.gov/business-directory-listing/pinnacle-hotel-management-co-llc",
+      "quote": "1480 ROYAL PALM BEACH BLVD A ROYAL PALM BEACH, FL 33411",
+      "title": "PINNACLE HOTEL MANAGEMENT CO LLC | Village of Royal Palm Beach Florida",
+      "family": "other",
+      "trustTier": "medium",
+      "accessedAt": "2026-06-15",
+      "bindsPerson": false,
+      "publishedOrUpdated": null
+    },
+    {
+      "id": "s9",
+      "url": "https://www.zoominfo.com/c/pinnacle-hotel-management/225264449",
+      "quote": "With a portfolio that includes over 2,500 rooms and more than 30 completed hotel development projects across various markets, Pinnacle manages both its own hotels and those owned by other companies.",
+      "title": "Pinnacle Hotel Management - Overview, News & Similar companies | ZoomInfo.com",
+      "family": "data_broker",
+      "trustTier": "medium",
+      "accessedAt": "2026-06-15",
+      "bindsPerson": false,
+      "publishedOrUpdated": null
+    }
+  ],
+  "freshness": {
+    "title": {
+      "status": "undated-current-page",
+      "summary": "Aggregator lists 'Director of Finance' (lead supplies 'Corporate Director of Finance'); consistent but not independently dated or confirmed by a first-party source.",
+      "sourceIds": [
+        "s1"
+      ]
+    },
+    "employer": {
+      "status": "undated-current-page",
+      "summary": "Aggregator profile presents Pinnacle Hotel Management as her current employer with no publish date; no conflicting or dated signal found either way.",
+      "sourceIds": [
+        "s1",
+        "s3"
+      ]
+    },
+    "location": {
+      "status": "current",
+      "summary": "Pinnacle Hotel Management's headquarters (1480 Royal Palm Beach Blvd, Royal Palm Beach/West Palm Beach, FL 33411) is confirmed by the company's own site, a data aggregator, and a local village business directory, matching the supplied work location.",
+      "sourceIds": [
+        "s3",
+        "s7"
+      ]
+    }
+  },
+  "humanPause": {
+    "code": null,
+    "prompt": null,
+    "options": [],
+    "required": false
+  },
+  "resolution": {
+    "level": "company",
+    "whyNow": "No hard company-specific trigger (funding event, M&A, leadership change) was found for this exact entity; the only soft signal is current property-level finance hiring activity (e.g., a Controller opening) suggesting staffing gaps that could add pressure to the corporate office. This should be treated as ambient context, not a headline reason.",
+    "selectedFactIds": [
+      "c1",
+      "c2",
+      "c3",
+      "c4",
+      "c5",
+      "c6"
+    ],
+    "reasonForWriting": "Pinnacle Hotel Management is a multi-brand (Marriott/Hilton), multi-property third-party hotel management company whose corporate finance office is contractually responsible for delivering complete monthly financial statements to hotel owners across a 30+ property portfolio, run by a lean leadership layer (a CFO and a Corporate Director of Finance) — a structure where interim capacity, financial reporting rigor, and audit-readiness support are plausibly relevant even absent a specific named trigger.",
+    "prohibitedAssumptions": [
+      "Do not assume Rachel Barron's tenure length, direct reporting relationship to CFO Felicia Matula, or specific day-to-day pain points as confirmed facts.",
+      "Do not reference or conflate this company with similarly named but unrelated hotel companies found in search (Pinnacle Hotel Group of Arkansas/Nashville portfolio news, Pinnacle Hospitality Partners, Pinnacle Hotels and Resorts of Vancouver, Pinnacle Advisory Group of Boston, Pinnacle Hospitality of South Carolina).",
+      "Do not treat the ZoomInfo career-history details as confirmed; they are low-trust and undated.",
+      "Do not assume a specific audit, IPO, or transaction event is underway at Pinnacle Hotel Management."
+    ]
+  },
+  "personFacts": [
+    {
+      "id": "p1",
+      "quote": "Rachel Barron is the Director of Finance at Pinnacle Hotel Management... Previously at Marriott, Rachel served as Senior Assistant Director, Finance & Accounting",
+      "family": "data_broker",
+      "weight": "seasoning",
+      "freshness": "undated",
+      "sourceIds": [
+        "s1"
+      ],
+      "confidence": "tentative",
+      "normalizedClaim": "Rachel Barron is listed as Director of Finance at Pinnacle Hotel Management, with a hospitality finance background including a prior role as Senior Assistant Director, Finance & Accounting at Marriott.",
+      "significanceReason": "Shows a career path from a major branded hotel operator into a regional third-party management company, supporting plausibility of the supplied identity and her fluency with Marriott/Hilton brand financial standards."
+    },
+    {
+      "id": "p2",
+      "quote": "Rachel progressed through several roles at Great Wolf Resorts... Accountant, Kids Experience Manager, Manager of Guest Services, and Supervisor of Guest Services",
+      "family": "data_broker",
+      "weight": "discard",
+      "freshness": "undated",
+      "sourceIds": [
+        "s1"
+      ],
+      "confidence": "tentative",
+      "normalizedClaim": "Earlier career included non-finance operational roles at Great Wolf Resorts (Accountant, Kids Experience Manager, Guest Services Manager/Supervisor).",
+      "significanceReason": "Biographical color only; not weighty enough to anchor a finance-focused first contact and risks over-personalizing thin, low-trust data."
+    }
+  ],
+  "companyFacts": [
+    {
+      "id": "c1",
+      "quote": "With a portfolio that includes over 2,500 rooms and more than 30 completed hotel development projects across various markets, Pinnacle manages both its own hotels and those owned by other companies.",
+      "family": "data_broker",
+      "weight": "anchor",
+      "freshness": "undated",
+      "sourceIds": [
+        "s3",
+        "s9"
+      ],
+      "confidence": "supported",
+      "normalizedClaim": "Pinnacle Hotel Management's portfolio includes over 2,500 rooms and more than 30 completed hotel development projects, managing both its own hotels and those owned by other companies.",
+      "significanceReason": "Establishes the scale of the multi-property, multi-owner finance operation the corporate finance office must support — directly relevant to Embark's portfolio/reporting capabilities."
+    },
+    {
+      "id": "c2",
+      "quote": "Pinnacle Hotel Management specializes in the development and management of Marriott and Hilton branded hotels... resulting in annual sales exceeding 130 million.",
+      "family": "data_broker",
+      "weight": "anchor",
+      "freshness": "undated",
+      "sourceIds": [
+        "s3"
+      ],
+      "confidence": "supported",
+      "normalizedClaim": "Pinnacle Hotel Management specializes in developing and managing Marriott and Hilton branded hotels, including brand-conversion projects, with annual sales exceeding $130 million.",
+      "significanceReason": "Frames the brand-compliance and financial-reporting complexity inherent to a Marriott/Hilton-focused third-party operator."
+    },
+    {
+      "id": "c3",
+      "quote": "Pinnacle Hotel Management headquarters are located in 1480 Royal Palm Beach Blvd Ste A, West Palm Beach, Florida, 33411",
+      "family": "data_broker",
+      "weight": "anchor",
+      "freshness": "current",
+      "sourceIds": [
+        "s3",
+        "s7"
+      ],
+      "confidence": "supported",
+      "normalizedClaim": "Pinnacle Hotel Management is headquartered at 1480 Royal Palm Beach Blvd, Royal Palm Beach/West Palm Beach, FL 33411.",
+      "significanceReason": "Confirms the supplied work location and grounds the company as a genuine, locatable operator rather than a data artifact."
+    },
+    {
+      "id": "c4",
+      "quote": "We will provide third party management and complete all aspects of your monthly Financial Statements.",
+      "family": "other",
+      "weight": "anchor",
+      "freshness": "undated",
+      "sourceIds": [
+        "s6"
+      ],
+      "confidence": "supported",
+      "normalizedClaim": "Pinnacle Hotel Management's service offering includes providing third-party hotel owners with complete monthly financial statements.",
+      "significanceReason": "Directly ties the corporate finance function's core mandate to recurring, portfolio-wide owner financial reporting — the clearest structural link to Embark's financial reporting advisory and Office of the CFO capabilities."
+    },
+    {
+      "id": "c5",
+      "quote": "Felicia Matula joined Pinnacle in 1999 and is the Chief Financial Officer.",
+      "family": "company_press",
+      "weight": "anchor",
+      "freshness": "undated",
+      "sourceIds": [
+        "s4"
+      ],
+      "confidence": "supported",
+      "normalizedClaim": "Felicia Matula, who joined Pinnacle in 1999 and rose from GM to Director of Finance, is the company's Chief Financial Officer.",
+      "significanceReason": "Establishes the likely reporting structure (CFO plus a Corporate Director of Finance) overseeing a 30+ property portfolio — a lean corporate finance leadership layer relative to portfolio scale."
+    },
+    {
+      "id": "c6",
+      "quote": "Company size 501-1,000 employees · Headquarters · Royal Palm Beach, Florida... Founded · 1997",
+      "family": "other",
+      "weight": "seasoning",
+      "freshness": "current",
+      "sourceIds": [
+        "s6"
+      ],
+      "confidence": "supported",
+      "normalizedClaim": "Pinnacle Hotel Management has approximately 501-1,000 employees, was founded in 1997, and is headquartered in Royal Palm Beach, Florida.",
+      "significanceReason": "Sizes the company for calibrating register and scale of engagement."
+    },
+    {
+      "id": "c7",
+      "quote": "Looking for a Controller at The Celeste Hotel. Join this amazing team!",
+      "family": "other",
+      "weight": "seasoning",
+      "freshness": "recent",
+      "sourceIds": [
+        "s6"
+      ],
+      "confidence": "supported",
+      "normalizedClaim": "The company has recent open postings for property-level finance roles, including a Controller position at The Celeste Hotel, Orlando.",
+      "significanceReason": "Soft signal of property-level finance staffing turnover/gaps that could add pressure to corporate oversight, though not confirmed to touch Rachel Barron directly."
+    }
+  ],
+  "leadIdentity": {
+    "classification": "usable_at_lower_resolution",
+    "currentSummary": "A ZoomInfo aggregator profile lists a Rachel Barron as 'Director of Finance' at Pinnacle Hotel Management with a hospitality-finance background (prior Senior Assistant Director, Finance & Accounting at Marriott; earlier operational roles at Great Wolf Resorts). Name, company, and general title band match the supplied lead, but this is the only person-level corroboration found, and it is a low-trust data-broker source rather than a first-party company page, professional profile, or press mention naming her.",
+    "conflictSummary": null,
+    "suppliedSummary": "Rachel Barron, Corporate Director of Finance, Pinnacle Hotel Management, West Palm Beach, FL (email inferred, status valid).",
+    "supportingSourceIds": [
+      "s1",
+      "s3"
+    ]
+  },
+  "prospectWorld": {
+    "pressures": [
+      {
+        "sourceIds": [
+          "s6"
+        ],
+        "statement": "The corporate finance function's stated mandate includes producing complete monthly financial statements for third-party owners across a multi-brand, multi-property portfolio, which is a recurring consolidation and reporting-compliance workload rather than a one-time project.",
+        "confidence": "supported"
+      },
+      {
+        "sourceIds": [
+          "s6"
+        ],
+        "statement": "The company is actively recruiting property-level finance roles (e.g., a Controller opening at one managed hotel), a soft signal of staffing gaps at the property level that can add pressure to a small corporate finance office.",
+        "confidence": "tentative"
+      }
+    ],
+    "contactNorm": {
+      "form": "unknown",
+      "sourceIds": [],
+      "statement": "No direct evidence was found on how this company's finance leadership prefers to be approached by outside advisors; hospitality corporate offices of this size are generally reached by direct call or email rather than formal procurement processes, but this is an inference, not a confirmed norm.",
+      "confidence": "tentative"
+    },
+    "roleReality": "Rachel Barron sits as the senior finance leader beneath the CFO at a Florida-headquartered, roughly 500-1,000 employee third-party hotel management company that develops and operates a 2,500+ room, 30+ property portfolio under Marriott and Hilton flags, and that contractually delivers complete monthly financial statements to third-party hotel owners in addition to managing its own properties.",
+    "registerNotes": [
+      "Mid-market, founder-led (1997, Ron Franklin & Dick Vilardo) hospitality operator register: operationally plainspoken, not Wall Street/PE-formal.",
+      "Multiple unrelated companies share the 'Pinnacle' hotel name (Pinnacle Hotel Group of Arkansas/Nashville-area news, Pinnacle Hospitality Partners, Pinnacle Hotels and Resorts of Vancouver) — none of these belong to this lead's employer and must not be referenced."
+    ],
+    "commonVendorPatterns": [
+      "PMS/revenue-management software vendors pitching hotel operators",
+      "outsourced accounting / hotel finance benchmarking vendors",
+      "franchise brand-compliance and audit-readiness consultants"
+    ]
+  },
+  "schemaVersion": "2",
+  "statusGeometry": {
+    "basis": "Lucas Figueroa is a Business Development Associate (a junior BD role) at Embark approaching a Corporate Director of Finance who appears to be the senior in-house finance leader beneath the company's CFO overseeing a 30+ property portfolio — an unknown-to-established, junior-to-senior dynamic, not a peer approach.",
+    "safePosture": "Write with deference and no presumed peerhood: a small, concrete ask (a short call), genuine curiosity about how she runs portfolio-wide financial reporting across a multi-brand hotel management company, and no claim of shared standing or insider familiarity beyond what is honestly known.",
+    "classification": "sender_junior"
+  },
+  "roleSegmentFacts": [
+    {
+      "id": "r1",
+      "quote": "Felicia Matula joined Pinnacle in 1999 and is the Chief Financial Officer.",
+      "family": "other",
+      "weight": "seasoning",
+      "freshness": "undated",
+      "sourceIds": [
+        "s4",
+        "s6"
+      ],
+      "confidence": "tentative",
+      "normalizedClaim": "A Corporate Director of Finance role at a third-party hotel management company of this structure typically sits beneath the CFO and carries portfolio-wide financial consolidation and franchisor (Marriott/Hilton) compliance-reporting responsibility.",
+      "significanceReason": "Frames the likely day-to-day reality of the role even without a person-specific confirmation of Rachel Barron's exact duties or reporting line."
+    }
+  ],
+  "resolutionUpgrade": {
+    "obtainableFact": "Whether Rachel Barron's Corporate Director of Finance role directly owns portfolio-wide consolidation/owner-reporting and audit-readiness work (versus a narrower scope), and whether the corporate finance team is currently capacity-constrained.",
+    "whyItWouldRaiseResolution": "Confirming her direct scope would let the email name the specific pressure (owner reporting across a 30+ property, multi-brand portfolio) with confidence rather than inferring it from the company's general service description, moving the email from company-level to person-level resolution.",
+    "howToObtainWithoutGuessing": "A LinkedIn profile or a first reply from Rachel herself would confirm scope; this cannot be guessed from the current aggregator and company-site material and should not be asserted as fact in the draft."
+  },
+  "structuralRelation": {
+    "relation": "complementary",
+    "sourceIds": [
+      "s4",
+      "s6"
+    ],
+    "tensionToName": null,
+    "supportedReason": "Embark's Office of the CFO and Financial Reporting Advisory offerings map directly to the recurring, multi-entity owner financial statement preparation this corporate finance office appears to own, and Team Continuity / Embedded Project Execution Support map to the property-level finance staffing gaps suggested by current hiring activity.",
+    "embarkCapabilityId": "office_of_the_cfo",
+    "recipientConstraint": "The visible corporate finance leadership is thin relative to portfolio size — one CFO and one Corporate Director of Finance apparent for a 2,500+ room, 30+ property, multi-brand portfolio that contractually owes owners complete monthly financial statements."
+  },
+  "companyContextProvenance": {
+    "origin": "fresh",
+    "validUntil": null,
+    "resolvedDomain": "pinnaclehotelmanagement.com",
+    "sourceDraftingItemId": null
+  }
+}

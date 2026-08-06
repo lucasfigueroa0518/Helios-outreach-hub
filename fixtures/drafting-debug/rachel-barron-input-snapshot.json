@@ -1,0 +1,54 @@
+{
+  "lead": {
+    "email": "rachel.barron@pinnaclehm.com",
+    "title": "Corporate Director of Finance",
+    "company": "Pinnacle Hotel Management",
+    "fullName": "Rachel Barron",
+    "lastName": "Barron",
+    "firstName": "Rachel",
+    "emailStatus": "inferred",
+    "linkedinUrl": null,
+    "workLocation": "West Palm Beach, Florida, United States",
+    "emailDecision": "valid"
+  },
+  "assets": {
+    "skillSha256": "1d36da0cda4fe6b42fcf61fa95652c7400c7088e33409a901940490a32a4ccf7",
+    "skillVersion": "v5",
+    "positioningSha256": "a24439c0d5d790a9a43bae88b8b8449cb5c048ae2a6aa75a4e93c42eef6756a9",
+    "positioningVersion": "v1",
+    "capabilityCatalogSha256": "bb5e370be84f5c6628672371fc4384223a867af999e006945a609c05265dba57",
+    "capabilityCatalogVersion": "v1"
+  },
+  "sender": {
+    "title": "Business Development Associate",
+    "profileId": "92f4b293-9355-40c5-a8de-3f4ae03accb5",
+    "workEmail": "l.figueroa@embarkwithus.com",
+    "voiceNotes": null,
+    "displayName": "Lucas Figueroa",
+    "signatureMode": "name_and_role",
+    "profileRevision": 1,
+    "professionalContext": {}
+  },
+  "provenance": {
+    "sourceRunId": "54145237-99c7-40c1-9fa1-37a99d67b2f6",
+    "emailProvenance": {},
+    "profileEnrichment": {}
+  },
+  "relationship": {
+    "pastWork": "",
+    "capturedAt": null,
+    "lastContacted": null,
+    "lastContactedBy": null,
+    "relationshipTier": "cold",
+    "reusedFromPriorLead": false,
+    "priorRelationshipActivity": null
+  },
+  "schemaVersion": 1,
+  "connectingContext": {
+    "mode": "cold",
+    "introducerName": null,
+    "rawCrmIndicator": null,
+    "suppliedContext": null,
+    "linkedinConnectionDegree": null
+  }
+}

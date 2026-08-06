@@ -1,0 +1,5 @@
+# Drafting text assets must stay LF so manifest SHAs are stable across OS checkouts.
+resources/drafting/*.md text eol=lf
+resources/drafting/*.txt text eol=lf
+resources/drafting/*.json text eol=lf
+resources/drafting/*.pdf binary

@@ -1,0 +1,50 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# env — never commit real secrets
+.env
+.env.local
+.env.*.local
+SUPABASE.txt
+
+# vercel
+.vercel
+
+# logs
+*.log
+npm-debug.log*
+
+# os
+.DS_Store
+Thumbs.db
+__MACOSX/
+
+# editor
+.vscode/
+.idea/
+
+# misc
+*.tsbuildinfo
+.orchestration-worker.lock
+tmp/
+
+# Local-only running bug ledgers / scratch (never commit)
+local/
+
+# Drafting PDF OCR scratch
+resources/drafting/_pdf_images/
+
+# Local-only bulk / tooling (not part of the dual-port deliverable)
+pe-relationships-sf/
+outreach brain/
+eng.traineddata
+.agents/
+.claude/
+.cursor/
+__MACOSX/
+skills-lock.json
+

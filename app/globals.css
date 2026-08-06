@@ -1,0 +1,184 @@
+/* =============================================================================
+   Design tokens — Helios Design System (../Helios Design System/colors_and_type.css).
+   Single source of visual truth: no component below should hardcode a color /
+   font-size / spacing / radius / shadow value — reference one of these vars.
+   Status/verification colors are a deliberate scoped exception: Helios's own
+   palette has only two accents (orange + green) and no semantic red/amber/
+   purple, but this is a dense data app that needs distinct hues per state
+   (valid/invalid/pending/missing/etc). Those semantic hues are kept as-is;
+   everything else (chrome, buttons, cards, type, radius, shadow, motion)
+   moves to Helios tokens. See reference/component-recipes.md in
+   .agents/skills/embark-dashboard-design for the reusable component shapes
+   (cards, stat tiles, drill-rows, tables, etc.) loaded via components.css.
+   ============================================================================= */
+
+:root {
+  /* ---- Color: surfaces & text (Helios neutral scale) --------------------- */
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-2: #f5f5f5;
+  --color-surface-hover: #f0f0f0;
+  --color-border: #e5e5e5;
+  --color-border-strong: #d4d4d4;
+  --color-text: #171717;
+  --color-text-muted: #525252;
+  --color-text-subtle: #737373;
+  --color-text-inverse: #ffffff;
+
+  /* ---- Color: brand / interactive ---------------------------------------- */
+  /* Helios Orange (primary CTA/brand accent) + Helios Green (secondary — eyebrows/labels). */
+  --color-primary: #ff5e1a;
+  --color-primary-hover: #e54e0f;
+  --color-primary-soft: #ffece3;
+  --color-focus-ring: #ff5e1a;
+  --color-accent-2: #138510;
+  --color-accent-2-soft: #e7f3e7;
+
+  /* ---- Color: semantic (each paired with a `-soft` tint for backgrounds) - */
+  /* Kept as a scoped exception to Helios's 2-accent palette — this dense
+     table UI relies on distinct hues per state. `--color-warning` is shifted
+     off pure orange (amber/gold) so it doesn't read as the new primary CTA color. */
+  --color-positive: #00b74f;
+  --color-positive-soft: #e3f7ec;
+  --color-email-found: #126b3a;
+  --color-email-found-soft: #dcefe4;
+  --color-format-guess: #8a6d00;
+  --color-format-guess-soft: #fff7d6;
+  --color-negative: #f9423a;
+  --color-negative-soft: #feeae9;
+  --color-warning: #b45309;
+  --color-warning-soft: #fdf3e7;
+  --color-data-missing: #8a3f72;
+  --color-data-missing-soft: #f8eafa;
+  --color-prior-lead: #087e8b;
+  --color-prior-lead-soft: #e5f6f7;
+  --color-relationship-recent: #b42318;
+  --color-relationship-recent-soft: #fde8e8;
+  --color-relationship-older: #b54708;
+  --color-relationship-older-soft: #fdeee2;
+  --color-neutral: #737373;
+  --color-neutral-soft: #f5f5f5;
+
+  /* ---- Color: extra flow/movement series (adapt names to your domain) --- */
+  --flow-primary-in: #ff5e1a;
+  --flow-secondary-in: #14b8c4;
+  --flow-primary-out: #b45309;
+  --flow-secondary-out: #f9423a;
+  --flow-tertiary-out: #138510;
+  --flow-net-line: #f0a577;
+  --color-forecast: #a3a3a3;
+  --color-forecast-soft: #f5f5f5;
+
+  /* ---- Color: categorical chart palette (fixed order = stable assignment) */
+  /* Not currently rendered anywhere in the app; left mapped to the new brand
+     hues for whenever a chart is added, so no component needs to change. */
+  --chart-1: #ff5e1a;
+  --chart-2: #00b74f;
+  --chart-3: #138510;
+  --chart-4: #8b5cf6;
+  --chart-5: #e0529c;
+  --chart-6: #14b8c4;
+  --chart-7: #f9423a;
+  --chart-8: #737373;
+  --chart-9: #6a9a3a;
+  --chart-10: #b4690e;
+  --chart-grid: #f0f0f0;
+  --chart-axis: #a3a3a3;
+
+  /* ---- Color: single branded "insight" accent (use sparingly, once) ----- */
+  --accent-gradient-from: #ff5e1a;
+  --accent-gradient-to: #138510;
+  --accent-gradient-bg: #ffece3;
+
+  /* ---- Typography ---------------------------------------------------------
+     Headings: Pragmatica Extended Bold (self-hosted via next/font/local as
+     --font-pragmatica in app/layout.tsx). Body/UI: Roboto (self-hosted via
+     next/font/google as --font-roboto). Font-size scale is left unchanged
+     from the dense-app defaults below (Helios's marketing-scale headings
+     would break table/card layouts), only the family + weight change. */
+  --font-sans: var(--font-roboto), -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-headline: var(--font-pragmatica), var(--font-roboto),
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    sans-serif;
+  --font-mono: "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-size-xs: 0.6875rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-md: 0.9375rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.5rem;
+  --font-size-2xl: 2rem;
+  --font-size-3xl: 2.5rem;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --letter-spacing-label: 0.06em;
+
+  /* ---- Spacing scale (already an 8px scale, matches Helios --s-*) -------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ---- Radius: scales with element size (Helios scale) ------------------- */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-2xl: 32px;
+  --radius-pill: 9999px;
+
+  /* ---- Shadow: nearly flat at rest, elevation used sparingly (Helios) ---- */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 12px 40px -12px rgba(0, 0, 0, 0.15);
+  --shadow-cta-glow: 0 0 24px -6px var(--color-primary);
+
+  /* ---- Layout ------------------------------------------------------------ */
+  --rail-width: 320px;
+  --content-max: 1480px;
+  --z-sticky: 50;
+  --z-overlay: 90;
+  --z-slideover: 100;
+
+  /* ---- Motion (Helios ease-out curve) ------------------------------------*/
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-fast: 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-base: 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ---- Base reset & app shell ---------------------------------------------- */
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--color-primary); }
+
+.app-shell {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.app-shell--centered {
+  min-height: 100vh;
+  justify-content: center;
+  align-items: center;
+}
+.text-muted { color: var(--color-text-muted); font-size: var(--font-size-sm); }

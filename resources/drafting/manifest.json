@@ -1,0 +1,43 @@
+{
+  "version": "v1",
+  "approvedAt": "2026-08-05T00:00:00.000Z",
+  "note": "Helios drafting assets (LF-normalized text). Subject-line block is writer-only.",
+  "assets": [
+    {
+      "name": "skill",
+      "file": "first-contact-outreach-v5.md",
+      "version": "v5.1",
+      "sha256": "34f15fdf26bc4772020af621a00f5069af7ec99e5b925698f5703d82c169844a",
+      "bytes": 17998
+    },
+    {
+      "name": "subject-line",
+      "file": "subject-line-v1.md",
+      "version": "v1",
+      "sha256": "c532fdf8289ea77a06dc9eb317fa2d8a0a79f1d9eb83748e9e9f80f185012b94",
+      "bytes": 4780
+    },
+    {
+      "name": "positioning",
+      "file": "helios-positioning-v1.md",
+      "version": "v1",
+      "sha256": "321865ba25a0a604ed067bee8230c995d1423a712fc0310fc1e99711c03a4725",
+      "bytes": 3063,
+      "textSha256": "321865ba25a0a604ed067bee8230c995d1423a712fc0310fc1e99711c03a4725"
+    },
+    {
+      "name": "positioning-pdf",
+      "file": "helios-positioning-v1.pdf",
+      "version": "v1",
+      "sha256": "c97bc56e345db6df2b5d0d17fb5b9788054ff225d2deb977e43c0ddb8c9276bb",
+      "bytes": 4365
+    },
+    {
+      "name": "capabilities",
+      "file": "embark-capabilities-v1.json",
+      "version": "v1",
+      "sha256": "68eb3e7f17a480e6b3fd68ab138cec933a84e8f481ec66d6f08bd811ffbe32cb",
+      "bytes": 6530
+    }
+  ]
+}
