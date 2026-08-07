@@ -717,10 +717,11 @@ export function EmailReview({
     return () => window.removeEventListener('keydown', onKeyDown);
   });
 
-  const generatedCount = reviewable.length;
+  const draftCount = reviewable.length;
   const emailPosition = currentIndex >= 0 ? currentIndex + 1 : 1;
+  const readySendCount = sends.pending;
 
-  if (!reviewable.length) {
+  if (!draftCount) {
     return (
       <div className="empty-state drafting-email-empty">
         <strong>No drafts ready yet</strong>
@@ -812,7 +813,13 @@ export function EmailReview({
             </span>
           </div>
           <div className="drafting-email-card__progress">
-            Email {emailPosition} of {generatedCount}
+            Email {emailPosition} of {draftCount}
+            {readySendCount > 0 ? (
+              <span className="drafting-email-card__progress-meta">
+                {' · '}
+                {readySendCount} ready to send
+              </span>
+            ) : null}
           </div>
           <div className="drafting-status-chip-row">
             <span

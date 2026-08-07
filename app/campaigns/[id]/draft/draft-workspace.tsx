@@ -213,13 +213,13 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
     });
   }
 
-  const [rowWindow, setRowWindow] = useState(100);
-
   const loadSnapshot = useCallback(async () => {
     const sequence = ++requestSequence.current;
     try {
+      // limit=0 loads every workspace item so Email N of M matches Generated
+      // and bulk-send readiness is visible against the full draft set.
       const response = await fetch(
-        `/api/campaigns/${campaignId}/drafting?limit=${rowWindow}&offset=0`,
+        `/api/campaigns/${campaignId}/drafting?limit=0&offset=0`,
       );
       const data = await response.json();
       if (sequence !== requestSequence.current) return;
@@ -248,7 +248,7 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
     }
-  }, [campaignId, rowWindow]);
+  }, [campaignId]);
 
   const rescueRun = useCallback(async () => {
     setRescueBusy(true);
@@ -796,23 +796,6 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
           onOptimisticApproveConfirm={confirmOptimisticLeadApprove}
         />
       )}
-
-      {(snapshot.email_rows.length + snapshot.leads_rows.length) < snapshot.counts.total ? (
-        <div className="drafting-load-more">
-          <button
-            type="button"
-            className="btn btn--secondary"
-            onClick={() => setRowWindow((current) => current + 100)}
-          >
-            Load more leads
-            {' '}
-            ({snapshot.email_rows.length + snapshot.leads_rows.length}
-            /
-            {snapshot.counts.total}
-            )
-          </button>
-        </div>
-      ) : null}
 
       {!snapshot.workspace.generation_complete || snapshot.activity.items.length > 0 || snapshot.counts.running > 0 ? (
         <DraftingActivityPanel snapshot={snapshot} />

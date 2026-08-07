@@ -3026,6 +3026,7 @@ a.segmented__item { text-decoration: none; }
 .drafting-email-card__meta { text-align: center; }
 .drafting-email-card__recipient { display: flex; flex-direction: column; gap: var(--space-1); }
 .drafting-email-card__progress { font-size: var(--font-size-sm); color: var(--color-text-muted); }
+.drafting-email-card__progress-meta { color: var(--color-text-subtle); }
 .drafting-status-chip {
   display: inline-flex;
   margin-top: var(--space-2);
