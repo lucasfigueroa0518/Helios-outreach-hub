@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { AlertTriangle, CheckCircle2, Upload as UploadIcon } from 'lucide-react';
 import { acceptedTypeLabel, isSheetUploadKind, sniffUpload, type SupportedUploadKind } from '@/lib/upload-types';
 import { isNonCriticalExtractionWarning } from '@/lib/extraction-warnings';
+import { chunkArray, mapPool } from '@/lib/async-pool';
 import { CampaignTabs } from '@/app/campaigns/[id]/campaign-tabs';
 import {
   clearDraftingLaunch,
@@ -13,6 +14,12 @@ import {
 } from '@/app/campaigns/[id]/draft/drafting-launch-overlay';
 import { SenderSetupModal } from '@/app/campaigns/[id]/draft/sender-setup-modal';
 import type { SenderProfile } from '@/app/campaigns/[id]/draft/types';
+import { isSenderProfileSignatureReady } from '@/lib/drafting/email-signature';
+
+/** Parallel storage PUTs — stays under typical browser per-host connection limits. */
+const UPLOAD_PUT_CONCURRENCY = 6;
+/** Must match server `UPLOAD_INTENT_BATCH_LIMIT` in lib/uploads.ts */
+const UPLOAD_INTENT_BATCH_LIMIT = 50;
 
 function preEnrichedIdempotencyKey(campaignId: string) {
   const storageKey = `pre-enriched-idempotency-${campaignId}`;
@@ -68,19 +75,37 @@ type ActiveRun = {
 
 type CostEstimate = {
   lead_count: number;
-  method?: 'path_bucket' | 'flat_fallback';
+  method?: 'path_bucket' | 'flat_fallback' | 'historical_avg';
   enrichment: { avg_usd: string; sample_size: number; source: string };
   drafting: { avg_usd: string; sample_size: number; source: string };
   per_lead_usd: string;
   campaign_total_usd: string;
   note: string;
-  buckets?: Array<{
-    path: string;
-    phase: string;
-    count: number;
-    unit_usd: string;
-    total_usd: string;
-  }>;
+};
+
+type CostGate = {
+  cap_usd: number;
+  lead_count: number;
+  estimated_total_usd: number;
+  per_lead_usd: number;
+  remaining_usd: number;
+  over_cap: boolean;
+  at_or_over_cap: boolean;
+  leads_to_remove: number;
+  method: string;
+  note: string;
+  estimate: CostEstimate;
+};
+
+type LaunchProgress = {
+  status: 'accepted' | 'running' | 'ready' | 'failed';
+  phase: string;
+  files_done: number;
+  files_total: number;
+  leads_staged: number;
+  items_created: number;
+  error: string | null;
+  href: string;
 };
 
 function formatBytes(bytes: number | null) {
@@ -93,6 +118,10 @@ function dedupeUploads(uploads: Upload[]) {
   const byId = new Map<string, Upload>();
   for (const upload of uploads) byId.set(upload.id, upload);
   return [...byId.values()];
+}
+
+function safeClientFileName(fileName: string) {
+  return fileName.replace(/^.*[\\/]/, '').replace(/[^\w.() -]+/g, '_').slice(0, 180) || 'upload';
 }
 
 export function CampaignUploads({
@@ -112,6 +141,8 @@ export function CampaignUploads({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const resumeAfterSender = useRef(false);
+  const resumeLateJoin = useRef(false);
+  const lateIngestInFlight = useRef(false);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
@@ -125,9 +156,18 @@ export function CampaignUploads({
   const [dragging, setDragging] = useState(false);
   const [researchConcurrency, setResearchConcurrency] = useState(8);
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
+  const [costGate, setCostGate] = useState<CostGate | null>(null);
+  const [costPanelOpen, setCostPanelOpen] = useState(false);
+  const [launchPhaseLine, setLaunchPhaseLine] = useState<string | null>(null);
   const [priorDecisionBusy, setPriorDecisionBusy] = useState(false);
   const [hasMadePriorDecision, setHasMadePriorDecision] = useState(false);
+  const [draftWorkspaceActive, setDraftWorkspaceActive] = useState(draftEnabledInitial);
   const [message, setMessage] = useState<{ text: string; tone: 'error' | 'notice' | 'success' } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{
+    phase: 'preparing' | 'uploading' | 'finalizing';
+    completed: number;
+    total: number;
+  } | null>(null);
   const preEnriched = !needsEnrichment;
   const activeRunStatus = activeRun?.status
     ?? uploads.find((upload) => upload.run_id === activeRunId)?.run_status;
@@ -146,7 +186,14 @@ export function CampaignUploads({
   const readySheetCount = uploads.filter((upload) =>
     upload.status === 'uploaded' || upload.status === 'extracted',
   ).length;
-  const canGoToDraft = preEnriched && readySheetCount > 0 && !hasPendingUploads && !busy;
+  const overCostCap = Boolean(costGate?.over_cap);
+  const uploadsBlockedByCap = Boolean(costGate?.at_or_over_cap);
+  const canGoToDraft = preEnriched && readySheetCount > 0 && !hasPendingUploads && !busy
+    && !draftWorkspaceActive && !overCostCap;
+
+  useEffect(() => {
+    setDraftWorkspaceActive(draftEnabledInitial);
+  }, [draftEnabledInitial]);
 
   async function loadUploads() {
     try {
@@ -162,6 +209,7 @@ export function CampaignUploads({
       setCanEnrich(Boolean(data.can_enrich));
       setStagedCount(data.staged_count ?? 0);
       setCostEstimate(data.cost_estimate ?? null);
+      setCostGate(data.cost_gate ?? null);
       if (typeof data.research_concurrency === 'number') {
         setResearchConcurrency(data.research_concurrency);
       }
@@ -199,72 +247,251 @@ export function CampaignUploads({
   }, [activeRunId, campaignId]);
 
   async function uploadFiles(files: FileList | File[]) {
+    if (uploadsBlockedByCap) {
+      setMessage({
+        text: costGate
+          ? `Campaign is at the $${costGate.cap_usd.toFixed(0)} cost cap. Remove at least ${Math.max(1, costGate.leads_to_remove)} lead${costGate.leads_to_remove === 1 ? '' : 's'} before uploading more files.`
+          : 'Campaign is at the $50 cost cap — remove leads before uploading more files.',
+        tone: 'error',
+      });
+      return;
+    }
     const fileList = Array.from(files);
     if (!fileList.length) return;
     setBusy(true);
     setMessage(null);
 
-    for (const file of fileList) {
-      const header = new Uint8Array(await file.slice(0, 32).arrayBuffer());
-      const sniffed = sniffUpload(file.name, header);
-      if (!sniffed) {
-        setMessage({
-          text: preEnriched
-            ? `“${file.name}” wasn’t added. Pre-enriched campaigns accept CSV, TSV, or Excel only.`
-            : `“${file.name}” wasn’t added. Accepted: images, PDF, CSV, Excel, Word, PowerPoint, or text.`,
-          tone: 'error',
-        });
-        continue;
-      }
-      if (preEnriched && !isSheetUploadKind(sniffed.kind)) {
-        setMessage({
-          text: `“${file.name}” wasn’t added. Pre-enriched campaigns accept CSV, TSV, or Excel only.`,
-          tone: 'error',
-        });
-        continue;
-      }
+    type Prepared = {
+      file: File;
+      mimeType: string;
+    };
 
+    const sniffResults = await mapPool(
+      fileList,
+      UPLOAD_PUT_CONCURRENCY,
+      async (file): Promise<{ ok: true; prepared: Prepared } | { ok: false; name: string }> => {
+        const header = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+        const sniffed = sniffUpload(file.name, header);
+        if (!sniffed) return { ok: false, name: file.name };
+        if (preEnriched && !isSheetUploadKind(sniffed.kind)) {
+          return { ok: false, name: file.name };
+        }
+        return { ok: true, prepared: { file, mimeType: sniffed.mimeType } };
+      },
+    );
+
+    const prepared: Prepared[] = [];
+    const rejected: string[] = [];
+    for (const result of sniffResults) {
+      if (result.ok) prepared.push(result.prepared);
+      else rejected.push(result.name);
+    }
+
+    if (!prepared.length) {
+      setMessage({
+        text: preEnriched
+          ? 'None of those files were added. Pre-enriched campaigns accept CSV, TSV, or Excel only.'
+          : 'None of those files were added. Accepted: images, PDF, CSV, Excel, Word, PowerPoint, or text.',
+        tone: 'error',
+      });
+      setBusy(false);
+      setUploadProgress(null);
+      return;
+    }
+
+    const total = prepared.length;
+    setUploadProgress({ phase: 'preparing', completed: 0, total });
+
+    type PendingTransfer = {
+      file: File;
+      mimeType: string;
+      upload: Upload;
+      uploadUrl: string;
+    };
+    const pending: PendingTransfer[] = [];
+    const prepareErrors: string[] = [];
+
+    for (const batch of chunkArray(prepared, UPLOAD_INTENT_BATCH_LIMIT)) {
       try {
         const intentResponse = await fetch(`/api/campaigns/${campaignId}/uploads`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            file_name: file.name,
-            mime_type: sniffed.mimeType,
-            byte_size: file.size,
+            files: batch.map(({ file, mimeType }) => ({
+              file_name: file.name,
+              mime_type: mimeType,
+              byte_size: file.size,
+            })),
           }),
         });
-        const intent = await intentResponse.json() as UploadIntent & { error?: string };
-        if (!intentResponse.ok) throw new Error(intent.error ?? 'Unable to prepare upload');
-
-        setUploads((current) => dedupeUploads([...current, intent.upload]));
-        const uploadResponse = await fetch(intent.uploadUrl, {
-          method: 'PUT',
-          headers: {
-            'content-type': sniffed.mimeType,
-            'x-upsert': 'false',
-          },
-          body: file,
-        });
-        const success = uploadResponse.ok;
-        const resultResponse = await fetch(`/api/campaigns/${campaignId}/uploads`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ upload_id: intent.upload.id, success }),
-        });
-        const result = await resultResponse.json() as { upload?: Upload };
-        if (!success || !resultResponse.ok || !result.upload) {
-          throw new Error(`Upload failed${uploadResponse.status ? ` (${uploadResponse.status})` : ''}`);
+        const intentData = await intentResponse.json() as {
+          intents?: Array<UploadIntent>;
+          error?: string;
+        };
+        if (!intentResponse.ok) {
+          throw new Error(intentData.error ?? 'Unable to prepare uploads');
         }
-        setUploads((current) => current.map((upload) => upload.id === result.upload?.id ? result.upload : upload));
+        const intents = intentData.intents ?? [];
+        if (intents.length !== batch.length) {
+          prepareErrors.push(
+            `${batch.length - intents.length} file${batch.length - intents.length === 1 ? '' : 's'} could not be prepared`,
+          );
+        }
+        if (intents.length === batch.length) {
+          for (let i = 0; i < batch.length; i += 1) {
+            pending.push({
+              file: batch[i].file,
+              mimeType: batch[i].mimeType,
+              upload: intents[i].upload,
+              uploadUrl: intents[i].uploadUrl,
+            });
+          }
+        } else {
+          const unused = [...batch];
+          for (const intent of intents) {
+            const index = unused.findIndex((item) =>
+              item.file.name === intent.upload.file_name
+              || safeClientFileName(item.file.name) === intent.upload.file_name,
+            );
+            if (index < 0) continue;
+            const matched = unused.splice(index, 1)[0];
+            pending.push({
+              file: matched.file,
+              mimeType: matched.mimeType,
+              upload: intent.upload,
+              uploadUrl: intent.uploadUrl,
+            });
+          }
+        }
+        setUploads((current) => dedupeUploads([
+          ...current,
+          ...intents.map((intent) => intent.upload),
+        ]));
+        setUploadProgress({
+          phase: 'preparing',
+          completed: Math.min(pending.length, total),
+          total,
+        });
       } catch (error) {
-        setMessage({ text: error instanceof Error ? error.message : `Could not upload “${file.name}”`, tone: 'error' });
-        await loadUploads();
+        prepareErrors.push(error instanceof Error ? error.message : 'Unable to prepare uploads');
       }
     }
 
+    if (!pending.length) {
+      setMessage({
+        text: prepareErrors[0] ?? 'Could not prepare any uploads',
+        tone: 'error',
+      });
+      setBusy(false);
+      setUploadProgress(null);
+      await loadUploads();
+      return;
+    }
+
+    setUploadProgress({ phase: 'uploading', completed: 0, total: pending.length });
+
+    type TransferResult = { uploadId: string; success: boolean; error?: string };
+    const transferResults = await mapPool(
+      pending,
+      UPLOAD_PUT_CONCURRENCY,
+      async (item): Promise<TransferResult> => {
+        try {
+          const uploadResponse = await fetch(item.uploadUrl, {
+            method: 'PUT',
+            headers: {
+              'content-type': item.mimeType,
+              'x-upsert': 'false',
+            },
+            body: item.file,
+          });
+          if (!uploadResponse.ok) {
+            return {
+              uploadId: item.upload.id,
+              success: false,
+              error: `“${item.file.name}” failed (${uploadResponse.status})`,
+            };
+          }
+          return { uploadId: item.upload.id, success: true };
+        } catch {
+          return {
+            uploadId: item.upload.id,
+            success: false,
+            error: `“${item.file.name}” failed to upload`,
+          };
+        }
+      },
+      (completed, transferTotal) => {
+        setUploadProgress({ phase: 'uploading', completed, total: transferTotal });
+      },
+    );
+
+    setUploadProgress({ phase: 'finalizing', completed: pending.length, total: pending.length });
+
+    const completions = transferResults.map((result) => ({
+      upload_id: result.uploadId,
+      success: result.success,
+    }));
+
+    for (const batch of chunkArray(completions, UPLOAD_INTENT_BATCH_LIMIT)) {
+      try {
+        const resultResponse = await fetch(`/api/campaigns/${campaignId}/uploads`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ completions: batch }),
+        });
+        const result = await resultResponse.json() as { uploads?: Upload[]; error?: string };
+        if (!resultResponse.ok) {
+          throw new Error(result.error ?? 'Unable to finalize uploads');
+        }
+        const updated = result.uploads ?? [];
+        if (updated.length) {
+          setUploads((current) => {
+            const byId = new Map(updated.map((upload) => [upload.id, upload]));
+            return current.map((upload) => byId.get(upload.id) ?? upload);
+          });
+        }
+      } catch (error) {
+        prepareErrors.push(error instanceof Error ? error.message : 'Unable to finalize uploads');
+      }
+    }
+
+    const uploadedOk = transferResults.filter((result) => result.success).length;
+    const transferErrors = transferResults
+      .filter((result) => !result.success && result.error)
+      .map((result) => result.error!);
+
     await loadUploads();
     setBusy(false);
+    setUploadProgress(null);
+
+    const notices = [
+      ...rejected.map((name) => `“${name}” wasn’t accepted`),
+      ...prepareErrors,
+      ...transferErrors,
+    ];
+
+    if (uploadedOk > 0 && notices.length === 0) {
+      setMessage({
+        text: uploadedOk === 1
+          ? '1 file staged.'
+          : `${uploadedOk} files staged.`,
+        tone: 'success',
+      });
+    } else if (uploadedOk > 0) {
+      setMessage({
+        text: `${uploadedOk} staged · ${notices.length} issue${notices.length === 1 ? '' : 's'}: ${notices.slice(0, 3).join(' · ')}${notices.length > 3 ? '…' : ''}`,
+        tone: 'notice',
+      });
+    } else {
+      setMessage({
+        text: notices.slice(0, 3).join(' · ') || 'Upload failed',
+        tone: 'error',
+      });
+    }
+
+    if (preEnriched && draftWorkspaceActive && uploadedOk > 0) {
+      void maybeAutoJoinDraftAfterUpload();
+    }
   }
 
   async function removeUpload(uploadId: string) {
@@ -302,18 +529,74 @@ export function CampaignUploads({
     setGoingToDraft(false);
   }, [campaignId]);
 
-  const runPreEnrichedIngest = useCallback(async () => {
+  const pollLaunchUntilReady = useCallback(async () => {
+    const href = `/campaigns/${campaignId}/draft`;
+    for (let attempt = 0; attempt < 3_600; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+      try {
+        const response = await fetch(`/api/campaigns/${campaignId}/pre-enriched/ingest`);
+        const data = await response.json() as { progress?: LaunchProgress | null };
+        const progress = data.progress;
+        if (!progress) continue;
+        if (progress.phase === 'extracting' || progress.phase === 'queued') {
+          setLaunchPhaseLine(
+            `Extracting sheets ${progress.files_done}/${progress.files_total}`
+            + (progress.leads_staged ? ` · ${progress.leads_staged} leads staged` : ''),
+          );
+        } else if (progress.phase === 'staging') {
+          setLaunchPhaseLine(`Staging ${progress.leads_staged} leads…`);
+        } else if (progress.phase === 'syncing') {
+          setLaunchPhaseLine(
+            progress.items_created
+              ? `Opening workspace · ${progress.items_created} items…`
+              : 'Opening your drafting workspace…',
+          );
+        }
+        if (progress.status === 'ready') {
+          window.location.href = progress.href || href;
+          return;
+        }
+        if (progress.status === 'failed') {
+          cancelGoToDraft();
+          lateIngestInFlight.current = false;
+          setLaunchPhaseLine(null);
+          const err = progress.error ?? 'Could not stage leads for drafting';
+          setMessage({
+            text: err.includes('SHA-256') || err.includes('asset')
+              ? 'Drafting assets are out of sync. Ask an admin to run npm run drafting:sync-manifest.'
+              : err,
+            tone: 'error',
+          });
+          return;
+        }
+      } catch {
+        // Keep polling through transient network blips.
+      }
+    }
+    cancelGoToDraft();
+    lateIngestInFlight.current = false;
+    setMessage({ text: 'Starting drafting is taking longer than expected — refresh and check Draft.', tone: 'notice' });
+  }, [campaignId, cancelGoToDraft]);
+
+  const runPreEnrichedIngest = useCallback(async (options?: { lateJoin?: boolean }) => {
+    const lateJoin = Boolean(options?.lateJoin);
     try {
+      const body: Record<string, string> = {};
+      if (!lateJoin) {
+        body.idempotency_key = preEnrichedIdempotencyKey(campaignId);
+      }
       const response = await fetch(`/api/campaigns/${campaignId}/pre-enriched/ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idempotency_key: preEnrichedIdempotencyKey(campaignId) }),
+        body: JSON.stringify(body),
       });
       const data = await response.json();
 
       if (response.status === 422 && data.field_errors?.sender_profile) {
         cancelGoToDraft();
+        lateIngestInFlight.current = false;
         resumeAfterSender.current = true;
+        resumeLateJoin.current = lateJoin;
         setSenderModalOpen(true);
         return;
       }
@@ -321,20 +604,71 @@ export function CampaignUploads({
         window.location.href = `/campaigns/${campaignId}/draft`;
         return;
       }
+      if (response.status === 402 || data.code === 'campaign_cost_cap') {
+        cancelGoToDraft();
+        lateIngestInFlight.current = false;
+        if (data.cost_gate) setCostGate(data.cost_gate);
+        setMessage({ text: data.error ?? 'Campaign exceeds the $50 cost cap.', tone: 'error' });
+        return;
+      }
+      if (data.code === 'asset_hash_mismatch') {
+        cancelGoToDraft();
+        lateIngestInFlight.current = false;
+        setMessage({
+          text: 'Drafting assets are out of sync. Ask an admin to run npm run drafting:sync-manifest.',
+          tone: 'error',
+        });
+        return;
+      }
       if (!response.ok) {
         cancelGoToDraft();
+        lateIngestInFlight.current = false;
         setMessage({ text: data.error ?? 'Could not stage leads for drafting', tone: 'error' });
         return;
       }
-      window.location.href = data.href ?? `/campaigns/${campaignId}/draft`;
+      if (lateJoin) {
+        setDraftWorkspaceActive(true);
+      }
+      if (data.status === 'ready') {
+        window.location.href = data.href ?? `/campaigns/${campaignId}/draft`;
+        return;
+      }
+      const progress = data.progress as LaunchProgress | undefined;
+      if (progress) {
+        setLaunchPhaseLine(
+          progress.files_total
+            ? `Extracting sheets ${progress.files_done}/${progress.files_total}`
+            : 'Queueing sheet extraction…',
+        );
+      }
+      await pollLaunchUntilReady();
     } catch {
       cancelGoToDraft();
+      lateIngestInFlight.current = false;
       setMessage({ text: 'Connection failed — try again.', tone: 'error' });
     }
-  }, [campaignId, cancelGoToDraft]);
+  }, [campaignId, cancelGoToDraft, pollLaunchUntilReady]);
+
+  async function maybeAutoJoinDraftAfterUpload() {
+    if (!preEnriched || !draftWorkspaceActive || lateIngestInFlight.current) return;
+    lateIngestInFlight.current = true;
+    setGoingToDraft(true);
+    setMessage({ text: 'Adding new sheet(s) to Draft…', tone: 'notice' });
+    markDraftingLaunch(campaignId);
+    await runPreEnrichedIngest({ lateJoin: true });
+  }
 
   async function goToDraft() {
     if (!canGoToDraft || goingToDraft) return;
+    if (overCostCap) {
+      setMessage({
+        text: costGate
+          ? `Estimated $${costGate.estimated_total_usd.toFixed(2)} exceeds the $${costGate.cap_usd.toFixed(0)} cap. Remove at least ${costGate.leads_to_remove} lead${costGate.leads_to_remove === 1 ? '' : 's'} to continue.`
+          : 'Campaign exceeds the $50 cost cap.',
+        tone: 'error',
+      });
+      return;
+    }
     setGoingToDraft(true);
     setMessage({ text: 'Staging leads for drafting…', tone: 'notice' });
     markDraftingLaunch(campaignId);
@@ -347,7 +681,8 @@ export function CampaignUploads({
         setMessage({ text: profileData.error ?? 'Could not load sender profile', tone: 'error' });
         return;
       }
-      if (!profileData.profiles?.length) {
+      const profiles = (profileData.profiles ?? []) as SenderProfile[];
+      if (!profiles.some((profile) => isSenderProfileSignatureReady(profile))) {
         cancelGoToDraft();
         resumeAfterSender.current = true;
         setSenderModalOpen(true);
@@ -366,10 +701,15 @@ export function CampaignUploads({
     setSenderModalOpen(false);
     if (resumeAfterSender.current) {
       resumeAfterSender.current = false;
+      const lateJoin = resumeLateJoin.current;
+      resumeLateJoin.current = false;
       setGoingToDraft(true);
-      setMessage({ text: 'Staging leads for drafting…', tone: 'notice' });
+      setMessage({
+        text: lateJoin ? 'Adding new sheet(s) to Draft…' : 'Staging leads for drafting…',
+        tone: 'notice',
+      });
       markDraftingLaunch(campaignId);
-      void runPreEnrichedIngest();
+      void runPreEnrichedIngest({ lateJoin });
     }
   }
 
@@ -432,12 +772,18 @@ export function CampaignUploads({
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
+    if (busy || uploadsBlockedByCap) return;
     void uploadFiles(event.dataTransfer.files);
   }
 
   return (
     <section className="upload-section">
-      {goingToDraft ? <DraftingLaunchOverlay /> : null}
+      {goingToDraft ? (
+        <DraftingLaunchOverlay
+          phaseLine={launchPhaseLine}
+          healthy={!message || message.tone !== 'error'}
+        />
+      ) : null}
       <div className="campaign-tabs-row">
         <CampaignTabs
           campaignId={campaignId}
@@ -450,26 +796,47 @@ export function CampaignUploads({
           }
           draftEnabled={
             preEnriched
-              ? draftEnabledInitial
+              ? draftWorkspaceActive
               : reviewEnabledInitial || uploads.some((upload) => upload.status === 'extracted')
           }
         />
-        {!preEnriched && costEstimate && costEstimate.lead_count > 0 && uploads.length > 0 && (
-          <div
-            className="campaign-cost-summary-compact"
-            aria-live="polite"
-            title={costEstimate.note}
-          >
-            <span className="campaign-cost-estimate__badge">
-              {costEstimate.method === 'path_bucket' ? 'Path Estimate' : 'Campaign Estimate'}
-            </span>
-            <span className="cost-total"><strong>${Number(costEstimate.campaign_total_usd).toFixed(2)}</strong> total</span>
-            <span className="cost-divider">·</span>
-            <span className="cost-leads">{costEstimate.lead_count} leads</span>
-            <span className="cost-divider">·</span>
-            <span className="cost-rate">${Number(costEstimate.per_lead_usd).toFixed(2)}/lead</span>
+        {costGate && costGate.lead_count > 0 ? (
+          <div className={`campaign-cost-panel${costGate.over_cap ? ' campaign-cost-panel--over' : ''}`}>
+            <button
+              type="button"
+              className="campaign-cost-panel__toggle"
+              aria-expanded={costPanelOpen}
+              onClick={() => setCostPanelOpen((open) => !open)}
+            >
+              <span className="campaign-cost-estimate__badge">
+                {costGate.method === 'historical_avg' ? 'Hist. Estimate' : 'Campaign Estimate'}
+              </span>
+              <span>
+                Est. ${costGate.estimated_total_usd.toFixed(2)} · {costGate.lead_count} leads
+              </span>
+              <span className="campaign-cost-panel__chevron" aria-hidden="true">
+                {costPanelOpen ? '▾' : '▸'}
+              </span>
+            </button>
+            {costPanelOpen ? (
+              <div className="campaign-cost-panel__body" aria-live="polite">
+                <p>
+                  ${costGate.per_lead_usd.toFixed(2)}/lead · ${costGate.cap_usd.toFixed(0)} campaign cap
+                  {costGate.remaining_usd >= 0
+                    ? ` · $${costGate.remaining_usd.toFixed(2)} remaining`
+                    : ''}
+                </p>
+                <p className="text-muted">{costGate.note || costEstimate?.note}</p>
+                {costGate.over_cap ? (
+                  <p className="field__error" role="alert">
+                    Over cap — remove at least {costGate.leads_to_remove} lead
+                    {costGate.leads_to_remove === 1 ? '' : 's'} to Enrich or Go to Draft.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
-        )}
+        ) : null}
       </div>
 
       <div className="review-guide upload-guide">
@@ -509,33 +876,63 @@ export function CampaignUploads({
       </div>
       <div className="upload-actions">
         <span className="text-muted">
-          {preEnriched ? 'Upload your enriched sheet, then click Go to Draft.' : 'Upload more lead sources at any time.'}
+          {draftWorkspaceActive
+            ? (preEnriched
+              ? 'New sheets are added to Draft automatically.'
+              : 'New files join Draft after you Enrich them.')
+            : (preEnriched
+              ? 'Upload your enriched sheet, then click Go to Draft.'
+              : 'Upload more lead sources at any time.')}
         </span>
       </div>
       <div
-        className={`dropzone${dragging ? ' dropzone--active' : ''}`}
-        onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+        className={`dropzone${dragging ? ' dropzone--active' : ''}${busy || uploadsBlockedByCap ? ' dropzone--busy' : ''}`}
+        onDragOver={(event) => { event.preventDefault(); if (!busy && !uploadsBlockedByCap) setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => { if (!busy && !uploadsBlockedByCap) inputRef.current?.click(); }}
         role="button"
         tabIndex={0}
-        onKeyDown={(event) => event.key === 'Enter' && inputRef.current?.click()}
+        aria-busy={busy}
+        aria-disabled={uploadsBlockedByCap}
+        onKeyDown={(event) => event.key === 'Enter' && !busy && !uploadsBlockedByCap && inputRef.current?.click()}
       >
         <input
           ref={inputRef}
           className="visually-hidden"
           type="file"
-          multiple={!preEnriched}
+          multiple
           accept={preEnriched ? '.csv,.tsv,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel' : undefined}
           onChange={onInput}
         />
         <span className="dropzone__icon"><UploadIcon size={18} /></span>
-        <strong>{busy ? 'Uploading files…' : 'Drop files here or browse'}</strong>
+        <strong>
+          {uploadProgress
+            ? (uploadProgress.phase === 'preparing'
+              ? `Preparing ${uploadProgress.total} file${uploadProgress.total === 1 ? '' : 's'}…`
+              : uploadProgress.phase === 'finalizing'
+                ? 'Finalizing…'
+                : `Uploading ${uploadProgress.completed} of ${uploadProgress.total}…`)
+            : busy
+              ? 'Uploading files…'
+              : 'Drop files here or browse'}
+        </strong>
+        {uploadProgress && uploadProgress.phase === 'uploading' ? (
+          <div className="dropzone__progress" aria-hidden="true">
+            <span
+              style={{
+                width: `${Math.max(
+                  4,
+                  Math.round((uploadProgress.completed / Math.max(uploadProgress.total, 1)) * 100),
+                )}%`,
+              }}
+            />
+          </div>
+        ) : null}
         <span>
           {preEnriched
-            ? 'CSV, TSV, or Excel spreadsheets'
-            : 'Screenshots & photos, PDF, CSV, Excel, PowerPoint, Word, and text'}
+            ? 'CSV, TSV, or Excel spreadsheets — many at once'
+            : 'Screenshots & photos, PDF, CSV, Excel, PowerPoint, Word, and text — many at once'}
         </span>
         <span className="text-muted">
           {preEnriched
@@ -647,41 +1044,59 @@ export function CampaignUploads({
               ({activeRun?.stats?.enrichment?.companies_remaining ?? 0} research tasks remaining).
             </p>
           )}
-          {uploads.map((upload) => (
-            <div
-              className={[
-                'upload-row',
-                !preEnriched && isUploadEnriched(upload, activeRunId) ? 'upload-row--enriched' : '',
-              ].filter(Boolean).join(' ')}
-              key={upload.id}
-            >
-              <div>
-                <strong>{upload.file_name}</strong>
-                <span>{upload.mime_type ? acceptedTypeLabel(kindForMime(upload.mime_type)) : 'File'} · {formatBytes(upload.byte_size)}</span>
-                {!preEnriched && <UploadProgress upload={upload} activeRunId={activeRunId} />}
-                {!preEnriched && <UploadWarnings upload={upload} />}
+          <div
+            className={[
+              'upload-list__rows',
+              uploads.length > 10 ? 'upload-list__rows--scrollable' : '',
+            ].filter(Boolean).join(' ')}
+            role={uploads.length > 10 ? 'region' : undefined}
+            aria-label={uploads.length > 10 ? `Uploaded files (${uploads.length}), scroll to view all` : undefined}
+          >
+            {uploads.map((upload) => (
+              <div
+                className={[
+                  'upload-row',
+                  !preEnriched && isUploadEnriched(upload, activeRunId) ? 'upload-row--enriched' : '',
+                ].filter(Boolean).join(' ')}
+                key={upload.id}
+              >
+                <div>
+                  <strong>{upload.file_name}</strong>
+                  <span>{upload.mime_type ? acceptedTypeLabel(kindForMime(upload.mime_type)) : 'File'} · {formatBytes(upload.byte_size)}</span>
+                  {!preEnriched && <UploadProgress upload={upload} activeRunId={activeRunId} />}
+                  {!preEnriched && <UploadWarnings upload={upload} />}
+                </div>
+                <div className="upload-row__right">
+                  <span className={`status-chip status-chip--${statusClass(upload, activeRunId)}`}>
+                    {statusLabel(upload, activeRunId)}
+                  </span>
+                  {upload.run_status === 'uploading' && <button className="btn btn--quiet" onClick={() => void removeUpload(upload.id)} disabled={busy || goingToDraft}>Remove</button>}
+                </div>
               </div>
-              <div className="upload-row__right">
-                <span className={`status-chip status-chip--${statusClass(upload, activeRunId)}`}>
-                  {statusLabel(upload, activeRunId)}
-                </span>
-                {upload.run_status === 'uploading' && <button className="btn btn--quiet" onClick={() => void removeUpload(upload.id)} disabled={busy || goingToDraft}>Remove</button>}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
           {preEnriched ? (
-            <button
-              className={`btn btn--primary${goingToDraft ? ' btn--pending' : ''}`}
-              onClick={() => void goToDraft()}
-              disabled={!canGoToDraft || goingToDraft}
-              aria-busy={goingToDraft}
-            >
-              {goingToDraft
-                ? 'Staging leads…'
-                : readySheetCount > 0
-                  ? `Go to Draft${readySheetCount > 1 ? ` (${readySheetCount} files)` : ''}`
-                  : 'Go to Draft'}
-            </button>
+            draftWorkspaceActive ? (
+              <p className="field__notice" role="status">
+                Drafting is running — drop another sheet and it will join Draft automatically.
+              </p>
+            ) : (
+              <button
+                className={`btn btn--primary${goingToDraft ? ' btn--pending' : ''}`}
+                onClick={() => void goToDraft()}
+                disabled={!canGoToDraft || goingToDraft || overCostCap}
+                aria-busy={goingToDraft}
+                title={overCostCap ? `Over $${costGate?.cap_usd ?? 50} cap — remove leads first` : undefined}
+              >
+                {goingToDraft
+                  ? 'Staging leads…'
+                  : overCostCap
+                    ? 'Over cost cap'
+                  : readySheetCount > 0
+                    ? `Go to Draft${readySheetCount > 1 ? ` (${readySheetCount} files)` : ''}`
+                    : 'Go to Draft'}
+              </button>
+            )
           ) : showGoToReview ? (
             <Link className="btn btn--primary" href={`/campaigns/${campaignId}/review`}>
               Go to Review
@@ -690,9 +1105,10 @@ export function CampaignUploads({
             <button
               className="btn btn--primary"
               onClick={() => void startEnrichment()}
-              disabled={busy || enriching || cancelling || Boolean(activeRunId) || !canEnrich}
+              disabled={busy || enriching || cancelling || Boolean(activeRunId) || !canEnrich || overCostCap}
+              title={overCostCap ? `Over $${costGate?.cap_usd ?? 50} cap — remove leads first` : undefined}
             >
-              {enriching ? 'Starting…' : activeRunId ? 'Enrichment running' : stagedCount > 0 ? `Enrich ${stagedCount} file${stagedCount === 1 ? '' : 's'}` : 'Enrich'}
+              {enriching ? 'Starting…' : activeRunId ? 'Enrichment running' : overCostCap ? 'Over cost cap' : stagedCount > 0 ? `Enrich ${stagedCount} file${stagedCount === 1 ? '' : 's'}` : 'Enrich'}
             </button>
           )}
         </div>
@@ -704,6 +1120,7 @@ export function CampaignUploads({
         open={senderModalOpen}
         onClose={() => {
           resumeAfterSender.current = false;
+          resumeLateJoin.current = false;
           setSenderModalOpen(false);
         }}
         onSaved={onSenderSaved}

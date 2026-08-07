@@ -82,6 +82,8 @@ export class MissingDraftingAssetsError extends Error {
 }
 
 export class DraftingAssetHashMismatchError extends Error {
+  readonly code = 'asset_hash_mismatch' as const;
+
   constructor(message: string) {
     super(message);
     this.name = 'DraftingAssetHashMismatchError';

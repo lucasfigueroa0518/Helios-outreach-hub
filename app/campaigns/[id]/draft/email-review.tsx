@@ -730,6 +730,7 @@ export function EmailReview({
     'drafting-email-card',
     'card',
     editing || editFlash ? 'drafting-email-card--editing' : '',
+    alreadySent ? 'drafting-email-card--sent' : '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -825,25 +826,6 @@ export function EmailReview({
                             : current.draft.engagement === 'failed'
                               ? 'Send failed'
                               : 'Sent'}
-              </span>
-            ) : null}
-            {current.draft.export_quality_ready ? (
-              <span
-                className="drafting-status-chip drafting-status-chip--approved"
-                title="Lint and temporal quality gates currently pass (warmed cache)"
-              >
-                Export ready
-              </span>
-            ) : current.draft.temporal_status === 'blocked' || current.draft.lint_hard > 0 ? (
-              <span
-                className="drafting-status-chip drafting-status-chip--attention"
-                title={
-                  current.draft.lint_hard_codes.length > 0
-                    ? `Blocked: ${current.draft.lint_hard_codes.slice(0, 4).join(', ')}`
-                    : 'Export quality gates are blocked'
-                }
-              >
-                Export blocked
               </span>
             ) : null}
             {rewriting ? (

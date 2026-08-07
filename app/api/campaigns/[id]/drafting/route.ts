@@ -1,11 +1,17 @@
 import { NextRequest } from 'next/server';
 
+import {
+  assertCampaignUnderCostCap,
+  CampaignCostCapError,
+} from '@/lib/campaign-cost-cap';
+import { getCampaign } from '@/lib/campaigns';
 import { draftingErrorResponse, draftingJson } from '@/lib/drafting/api';
 import { getWorkspaceSnapshot, startDraftingWorkspace } from '@/lib/drafting/repository';
 import { getDraftingRuntimeReadiness } from '@/lib/drafting/runtime-readiness';
 import { getSession } from '@/lib/session';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -25,11 +31,17 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
     | 'all_generated'
     | 'needs_attention'
     | null;
+  const limitRaw = search.get('limit');
+  const offsetRaw = search.get('offset');
+  const limit = limitRaw == null ? undefined : Number(limitRaw);
+  const offset = offsetRaw == null ? undefined : Number(offsetRaw);
 
   try {
     const snapshot = await getWorkspaceSnapshot(campaignId, session.userId, {
       itemId,
       filter: filter ?? undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number.isFinite(offset) ? offset : undefined,
     });
     return draftingJson(snapshot);
   } catch (error) {
@@ -70,6 +82,12 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
   }
 
   try {
+    const campaign = await getCampaign(session.userId, campaignId);
+    if (!campaign) return draftingJson({ error: 'Campaign not found' }, 404);
+    await assertCampaignUnderCostCap({
+      campaignId,
+      needsEnrichment: campaign.needs_enrichment,
+    });
     const result = await startDraftingWorkspace(campaignId, session.userId, {
       senderProfileId: body.senderProfileId ?? body.sender_profile_id,
       budgetCapUsd: body.budgetCapUsd ?? body.budget_cap_usd,
@@ -77,6 +95,12 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     });
     return draftingJson(result, 202);
   } catch (error) {
+    if (error instanceof CampaignCostCapError) {
+      return draftingJson(
+        { error: error.message, code: error.code, cost_gate: error.gate },
+        402,
+      );
+    }
     return draftingErrorResponse(error);
   }
 }

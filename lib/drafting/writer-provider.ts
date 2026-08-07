@@ -70,6 +70,7 @@ function stubDraftOutput(input: DraftingWriteInput): DraftOutput {
   const audit = assessResearchTimeliness(input.packet);
   const firstFact = audit.facts.find((fact) => fact.disposition !== 'blocked');
   const usedFactIds = firstFact ? [firstFact.factId] : [];
+  // Never append a text signature — the send path adds the HTML headshot signature.
   const bodyText = [
     `Hi ${firstName},`,
     '',
@@ -77,8 +78,6 @@ function stubDraftOutput(input: DraftingWriteInput): DraftOutput {
     contextSentence,
     '',
     askSentence,
-    '',
-    input.inputSnapshot.sender.displayName,
   ].join('\n');
 
   return {

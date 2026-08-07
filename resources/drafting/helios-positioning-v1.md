@@ -2,6 +2,14 @@
 
 A team of forward-deployed AI engineers who build and ship, not advise from the sidelines. We integrate systems, train your team to run them, and build proprietary tools when off-the-shelf doesn't cut it. Our focus is agentic marketing and sales: automating the repetitive work while improving conversion, connecting your stack, and surfacing the intelligence buried in your data.
 
+## Examples of Services we Provide
+
+- AI Implementation
+- GAP or Top-Bottom Analysis
+- Full Stack Software Solution Development
+- AI Upskilling
+- AI Agent Roadmaps
+
 ## Industries we work with
 
 ### Professional Services

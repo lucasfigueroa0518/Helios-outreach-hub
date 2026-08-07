@@ -1,6 +1,10 @@
 import { NextRequest } from 'next/server';
 
 import { draftingErrorResponse, draftingJson } from '@/lib/drafting/api';
+import {
+  isLucasSenderEmail,
+  isSenderProfileSignatureReady,
+} from '@/lib/drafting/email-signature';
 import { listSenderProfiles, upsertSenderProfile } from '@/lib/drafting/repository';
 import { getSession } from '@/lib/session';
 import type { SenderSignatureMode } from '@/lib/drafting/types';
@@ -77,6 +81,20 @@ export async function POST(request: NextRequest) {
       professional_context: body.professionalContext ?? body.professional_context,
       is_default: body.isDefault ?? body.is_default,
     });
+    if (!isSenderProfileSignatureReady(profile)) {
+      const lucas = isLucasSenderEmail(profile.work_email);
+      return draftingJson(
+        {
+          error: 'Name, position, and headshot are required for the email signature',
+          field_errors: {
+            display_name: profile.display_name?.trim() ? undefined : 'required',
+            title: profile.title?.trim() ? undefined : 'required',
+            headshot: lucas || profile.headshot_storage_path?.trim() ? undefined : 'required',
+          },
+        },
+        422,
+      );
+    }
     return draftingJson({ profile }, body.id ? 200 : 201);
   } catch (error) {
     return draftingErrorResponse(error);

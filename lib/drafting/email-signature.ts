@@ -21,14 +21,28 @@ export const LUCAS_SIGNATURE_DEFAULTS = {
   headshotPublicPath: '/signatures/lucas-figueroa.jpg',
 } as const;
 
+/** Content-ID used when the headshot is inlined via Resend attachments. */
+export const SIGNATURE_HEADSHOT_CID = 'helios-signature-headshot';
+
+function isLocalOrigin(url: string): boolean {
+  return /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:|\/|$)/i.test(url.trim());
+}
+
+/**
+ * Public HTTPS origin for hosted assets.
+ * Never falls back to localhost — Gmail cannot fetch local URLs from a sent email.
+ */
 export function publicAppOrigin(): string {
-  const explicit = process.env.HELIOS_PUBLIC_URL?.trim()
-    || process.env.AUTH_URL?.trim()
-    || process.env.NEXTAUTH_URL?.trim();
-  if (explicit) return explicit.replace(/\/$/, '');
+  const explicit = process.env.HELIOS_PUBLIC_URL?.trim();
+  if (explicit && !isLocalOrigin(explicit)) return explicit.replace(/\/$/, '');
+
+  const auth = process.env.AUTH_URL?.trim() || process.env.NEXTAUTH_URL?.trim();
+  if (auth && !isLocalOrigin(auth)) return auth.replace(/\/$/, '');
+
   const vercel = process.env.VERCEL_URL?.trim();
   if (vercel) return `https://${vercel.replace(/^https?:\/\//, '').replace(/\/$/, '')}`;
-  return 'http://localhost:3000';
+
+  return 'https://www.heliosgroup.tech';
 }
 
 export function absolutePublicUrl(pathname: string): string {
@@ -41,33 +55,47 @@ export function isLucasSenderEmail(email: string | null | undefined): boolean {
 }
 
 /**
- * Resolve signature fields for a send. Lucas is hardcoded (headshot + company + name fallbacks);
- * other senders use profile fields + optional uploaded headshot served via public API.
+ * Resolve signature fields for a send. Lucas is hardcoded (headshot + company + name fallbacks).
+ * Headshot URLs for outbound email must be cid:… (inline attachment) — never remote http(s).
  */
 export function resolveEmailSignature(input: {
   workEmail: string;
   displayName?: string | null;
   title?: string | null;
   companyName?: string | null;
-  /** Profile id used for /api/public/sender-headshots/[id] when a headshot is stored. */
+  /** Profile id (UI / lookup only). */
   profileId?: string | null;
   headshotStoragePath?: string | null;
+  /** Required for email HTML: cid:… from an inline Resend attachment. */
+  headshotUrlOverride?: string | null;
+  /**
+   * When true, may emit hosted https URLs (UI preview only).
+   * Outbound sends must leave this false and pass a cid: override.
+   */
+  allowRemoteHeadshot?: boolean;
 }): EmailSignatureFields {
   const workEmail = input.workEmail.trim().toLowerCase();
+  const override = input.headshotUrlOverride?.trim() || null;
+  const allowRemote = Boolean(input.allowRemoteHeadshot);
 
   if (isLucasSenderEmail(workEmail)) {
     // Hardcoded visual identity for Lucas; profile title may override position only.
+    let headshotUrl = override;
+    if (!headshotUrl && allowRemote) {
+      headshotUrl = absolutePublicUrl(LUCAS_SIGNATURE_DEFAULTS.headshotPublicPath);
+    }
     return {
       displayName: LUCAS_SIGNATURE_DEFAULTS.displayName,
       title: (input.title?.trim() || LUCAS_SIGNATURE_DEFAULTS.title),
       companyName: LUCAS_SIGNATURE_DEFAULTS.companyName,
-      headshotUrl: absolutePublicUrl(LUCAS_SIGNATURE_DEFAULTS.headshotPublicPath),
+      headshotUrl,
     };
   }
 
-  const headshotUrl = input.profileId && input.headshotStoragePath
-    ? absolutePublicUrl(`/api/public/sender-headshots/${input.profileId}`)
-    : null;
+  let headshotUrl = override;
+  if (!headshotUrl && allowRemote && input.profileId && input.headshotStoragePath) {
+    headshotUrl = absolutePublicUrl(`/api/public/sender-headshots/${input.profileId}`);
+  }
 
   return {
     displayName: (input.displayName ?? '').trim() || workEmail,
@@ -99,22 +127,73 @@ export function plainTextBodyToHtml(bodyText: string): string {
     .join('\n');
 }
 
-/** Remove a trailing plain-text signature that mirrors name/title/company so HTML can own it. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function firstNameFromDisplay(displayName: string): string | null {
+  const first = displayName.trim().split(/\s+/)[0];
+  return first && first.length > 1 ? first : null;
+}
+
+/**
+ * Remove any trailing plain-text signature / sign-off so the HTML headshot block is the only one.
+ * Catches name, title, company, "Title, Company", first name alone, and Best,/Regards, closings.
+ */
 export function stripTrailingTextSignature(
   bodyText: string,
   signature: Pick<EmailSignatureFields, 'displayName' | 'title' | 'companyName'>,
 ): string {
   let text = bodyText.replace(/\r\n/g, '\n').replace(/\s+$/u, '');
-  const candidates = [signature.companyName, signature.title, signature.displayName]
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const displayName = signature.displayName.trim();
+  const title = signature.title.trim();
+  const company = signature.companyName.trim();
+  const firstName = firstNameFromDisplay(displayName);
+  const companyShort = company.replace(/\s+Group$/i, '').trim();
 
-  for (const part of candidates) {
-    const escaped = part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`(?:\\n+|\\s+)${escaped}\\s*$`, 'iu');
-    if (re.test(text)) text = text.replace(re, '').replace(/\s+$/u, '');
+  // Whole-line patterns only (never peel mid-line fragments like ", Helios").
+  // Combined title+company lines first so we don't leave "President," behind.
+  const linePatterns: string[] = [];
+  if (title && company) {
+    linePatterns.push(`${escapeRegExp(title)}\\s*,\\s*${escapeRegExp(company)}`);
+  }
+  if (title && companyShort && companyShort.toLowerCase() !== company.toLowerCase()) {
+    linePatterns.push(`${escapeRegExp(title)}\\s*,\\s*${escapeRegExp(companyShort)}`);
+  }
+  if (displayName) linePatterns.push(escapeRegExp(displayName));
+  if (firstName) linePatterns.push(escapeRegExp(firstName));
+  if (title) linePatterns.push(`${escapeRegExp(title)},?`);
+  if (company) linePatterns.push(escapeRegExp(company));
+  if (companyShort && companyShort.toLowerCase() !== company.toLowerCase()) {
+    linePatterns.push(escapeRegExp(companyShort));
+  }
+  // Common sign-offs writers put above a name block.
+  linePatterns.push('(?:Best|Best regards|Regards|Thanks|Thank you|Cheers|Warmly)\\s*,?');
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pattern of linePatterns) {
+      const re = new RegExp(`\\n+${pattern}\\s*$`, 'iu');
+      if (re.test(text)) {
+        text = text.replace(re, '').replace(/\s+$/u, '');
+        changed = true;
+      }
+    }
   }
   return text;
+}
+
+/** True when a sender profile has the fields required for the HTML signature. */
+export function isSenderProfileSignatureReady(profile: {
+  display_name?: string | null;
+  title?: string | null;
+  work_email?: string | null;
+  headshot_storage_path?: string | null;
+}): boolean {
+  if (!profile.display_name?.trim() || !profile.title?.trim()) return false;
+  if (isLucasSenderEmail(profile.work_email)) return true;
+  return Boolean(profile.headshot_storage_path?.trim());
 }
 
 export function buildSignatureHtml(signature: EmailSignatureFields): string {

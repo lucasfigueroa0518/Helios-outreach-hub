@@ -20,6 +20,7 @@ async function assertBillingGuardAllowsSend(): Promise<void> {
 import {
   createResendClient,
   isEmailSendConfigured,
+  resolveSendToEmail,
   sendOutreachEmail,
 } from '@/lib/drafting/send';
 import {
@@ -405,11 +406,12 @@ export async function executeImmediateResend(input: {
   senderProfileId?: string | null;
   headshotStoragePath?: string | null;
 }): Promise<{ status: 'sent' | 'failed'; providerMessageId?: string; error?: string }> {
+  const toEmail = resolveSendToEmail(input.campaignId, input.toEmail);
   try {
     const result = await sendOutreachEmail({
       fromName: input.fromName,
       fromEmail: input.fromEmail,
-      toEmail: input.toEmail,
+      toEmail,
       subject: input.subject,
       bodyText: input.bodyText,
       itemId: input.itemId,
@@ -432,7 +434,7 @@ export async function executeImmediateResend(input: {
       itemId: input.itemId,
       status: 'sent',
       fromEmail: input.fromEmail,
-      toEmail: input.toEmail,
+      toEmail,
       subject: input.subject,
       providerMessageId: result.providerMessageId,
       providerRfcMessageId,
@@ -444,7 +446,7 @@ export async function executeImmediateResend(input: {
       itemId: input.itemId,
       status: 'failed',
       fromEmail: input.fromEmail,
-      toEmail: input.toEmail,
+      toEmail,
       subject: input.subject,
       errorMessage: message,
     });
@@ -751,10 +753,34 @@ async function loadLatestSendablePayload(itemId: string): Promise<SendableDraftP
             nullif(trim(i.input_snapshot #>> '{sender,title}'), '') AS title,
             nullif(trim(i.input_snapshot #>> '{sender,companyName}'), '') AS company_name,
             nullif(trim(i.input_snapshot #>> '{sender,profileId}'), '') AS sender_profile_id,
-            nullif(trim(i.input_snapshot #>> '{sender,headshotStoragePath}'), '') AS headshot_storage_path,
+            coalesce(
+              nullif(trim(i.input_snapshot #>> '{sender,headshotStoragePath}'), ''),
+              sp.headshot_storage_path
+            ) AS headshot_storage_path,
             i.state
        FROM outreach.drafting_items i
        JOIN outreach.drafting_workspaces w ON w.id = i.workspace_id
+       LEFT JOIN LATERAL (
+         SELECT p.headshot_storage_path
+           FROM outreach.sender_profiles p
+          WHERE (
+                  nullif(trim(i.input_snapshot #>> '{sender,profileId}'), '') IS NOT NULL
+                  AND p.id::text = trim(i.input_snapshot #>> '{sender,profileId}')
+                )
+             OR (
+                  nullif(trim(i.input_snapshot #>> '{sender,workEmail}'), '') IS NOT NULL
+                  AND lower(p.work_email) = lower(trim(i.input_snapshot #>> '{sender,workEmail}'))
+                )
+          ORDER BY
+            CASE
+              WHEN nullif(trim(i.input_snapshot #>> '{sender,profileId}'), '') IS NOT NULL
+                   AND p.id::text = trim(i.input_snapshot #>> '{sender,profileId}')
+              THEN 0 ELSE 1
+            END,
+            p.is_default DESC,
+            p.updated_at DESC
+          LIMIT 1
+       ) sp ON true
        JOIN LATERAL (
          SELECT subject, body_text
            FROM outreach.email_drafts ed
@@ -774,7 +800,7 @@ async function loadLatestSendablePayload(itemId: string): Promise<SendableDraftP
     campaignId: row.campaign_id,
     fromName: row.from_name || 'Helios',
     fromEmail: row.from_email,
-    toEmail: row.to_email,
+    toEmail: resolveSendToEmail(row.campaign_id, row.to_email),
     subject: row.subject,
     bodyText: row.body_text,
     recipientName: row.recipient_name || row.to_email,

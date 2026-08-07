@@ -1,12 +1,26 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import { Resend } from 'resend';
 
+import { dbQuery } from '@/lib/db';
 import {
   appendPlainTextSignature,
   buildOutreachEmailHtml,
+  isLucasSenderEmail,
+  LUCAS_SIGNATURE_DEFAULTS,
   resolveEmailSignature,
+  SIGNATURE_HEADSHOT_CID,
   type EmailSignatureFields,
 } from '@/lib/drafting/email-signature';
+import {
+  EmailSendConfigurationError,
+  EmailSendProviderError,
+} from '@/lib/drafting/errors';
 import { normalizeDraftText } from '@/lib/drafting/normalize';
+import { downloadStoredObject } from '@/lib/storage';
+
+export { EmailSendConfigurationError, EmailSendProviderError } from '@/lib/drafting/errors';
 
 export type SendEmailInput = {
   fromName: string;
@@ -23,27 +37,25 @@ export type SendEmailInput = {
   headshotStoragePath?: string | null;
 };
 
+/**
+ * TEMP signature QA redirect — Campaign #3 only.
+ * Remove after the HTML signature looks good in a real inbox.
+ */
+export const SIGNATURE_TEST_CAMPAIGN_ID = '1fe7c162-cb1b-4bb0-b708-da6097d02753'; // Campaign #3
+export const SIGNATURE_TEST_TO_EMAIL = 'lafballsports@gmail.com';
+
+/** Apply the Campaign #3 signature-test recipient override when applicable. */
+export function resolveSendToEmail(campaignId: string | null | undefined, toEmail: string): string {
+  if ((campaignId ?? '').trim().toLowerCase() === SIGNATURE_TEST_CAMPAIGN_ID) {
+    return SIGNATURE_TEST_TO_EMAIL;
+  }
+  return toEmail.trim().toLowerCase();
+}
+
 export type SendEmailResult = {
   provider: 'resend';
   providerMessageId: string;
 };
-
-export class EmailSendConfigurationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'EmailSendConfigurationError';
-  }
-}
-
-export class EmailSendProviderError extends Error {
-  readonly providerMessage: string;
-
-  constructor(message: string, providerMessage?: string) {
-    super(message);
-    this.name = 'EmailSendProviderError';
-    this.providerMessage = providerMessage ?? message;
-  }
-}
 
 /** True when Resend can be invoked (API key present). Does not call the API. */
 export function isEmailSendConfigured(): boolean {
@@ -89,7 +101,94 @@ export function createResendClient(): Resend {
   return new Resend(apiKey);
 }
 
-function resolveSendSignature(input: SendEmailInput): EmailSignatureFields {
+type InlineHeadshot = {
+  content: Buffer;
+  filename: string;
+  contentType: string;
+  contentId: string;
+};
+
+/** Resolve storage path from payload, then live sender_profiles (id or email). */
+async function resolveHeadshotStoragePath(input: SendEmailInput): Promise<string | null> {
+  const direct = input.headshotStoragePath?.trim();
+  if (direct) return direct;
+
+  const profileId = input.senderProfileId?.trim();
+  if (profileId && /^[0-9a-f-]{36}$/i.test(profileId)) {
+    const { rows } = await dbQuery<{ headshot_storage_path: string | null }>(
+      `SELECT headshot_storage_path
+         FROM outreach.sender_profiles
+        WHERE id = $1`,
+      [profileId],
+    );
+    const fromId = rows[0]?.headshot_storage_path?.trim();
+    if (fromId) return fromId;
+  }
+
+  const workEmail = input.fromEmail.trim().toLowerCase();
+  if (!workEmail) return null;
+  const { rows } = await dbQuery<{ headshot_storage_path: string | null }>(
+    `SELECT headshot_storage_path
+       FROM outreach.sender_profiles
+      WHERE lower(work_email) = $1
+        AND headshot_storage_path IS NOT NULL
+        AND length(trim(headshot_storage_path)) > 0
+      ORDER BY is_default DESC, updated_at DESC
+      LIMIT 1`,
+    [workEmail],
+  );
+  return rows[0]?.headshot_storage_path?.trim() || null;
+}
+
+/**
+ * Load headshot bytes for EVERY sender and inline as a CID attachment.
+ * Never rely on remote http(s) image URLs in outbound email HTML.
+ */
+async function loadInlineHeadshot(input: SendEmailInput): Promise<InlineHeadshot | null> {
+  try {
+    if (isLucasSenderEmail(input.fromEmail)) {
+      const filePath = path.join(
+        process.cwd(),
+        'public',
+        LUCAS_SIGNATURE_DEFAULTS.headshotPublicPath.replace(/^\//, ''),
+      );
+      const content = await readFile(filePath);
+      return {
+        content,
+        filename: 'lucas-figueroa.jpg',
+        contentType: 'image/jpeg',
+        contentId: SIGNATURE_HEADSHOT_CID,
+      };
+    }
+
+    const storagePath = await resolveHeadshotStoragePath(input);
+    if (!storagePath) return null;
+
+    const content = await downloadStoredObject(storagePath);
+    const isPng = storagePath.toLowerCase().endsWith('.png');
+    return {
+      content,
+      filename: isPng ? 'headshot.png' : 'headshot.jpg',
+      contentType: isPng ? 'image/png' : 'image/jpeg',
+      contentId: SIGNATURE_HEADSHOT_CID,
+    };
+  } catch (error) {
+    console.error(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      component: 'email-signature',
+      message: 'headshot_inline_load_failed',
+      fromEmail: input.fromEmail,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    return null;
+  }
+}
+
+function resolveSendSignature(
+  input: SendEmailInput,
+  headshotUrlOverride: string | null,
+): EmailSignatureFields {
   return resolveEmailSignature({
     workEmail: input.fromEmail,
     displayName: input.fromName,
@@ -97,12 +196,13 @@ function resolveSendSignature(input: SendEmailInput): EmailSignatureFields {
     companyName: input.companyName,
     profileId: input.senderProfileId,
     headshotStoragePath: input.headshotStoragePath,
+    headshotUrlOverride,
   });
 }
 
 /** Send one outreach email through Resend (HTML signature + plain-text fallback). */
 export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmailResult> {
-  const toEmail = input.toEmail.trim().toLowerCase();
+  const toEmail = resolveSendToEmail(input.campaignId, input.toEmail);
   if (!toEmail || !toEmail.includes('@')) {
     throw new EmailSendProviderError('Recipient email is missing or invalid');
   }
@@ -113,7 +213,16 @@ export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmai
     throw new EmailSendProviderError('Subject and body are required to send');
   }
 
-  const signature = resolveSendSignature(input);
+  // Inline EVERY sender headshot as a CID attachment (no remote image fetches in Gmail).
+  const headshot = await loadInlineHeadshot(input);
+  const signature = resolveSendSignature(
+    input,
+    headshot ? `cid:${headshot.contentId}` : null,
+  );
+  if (signature.headshotUrl && !signature.headshotUrl.startsWith('cid:')) {
+    // Hard guard: never ship http(s) signature images.
+    signature.headshotUrl = null;
+  }
   const text = appendPlainTextSignature(bodyText, signature);
   const html = buildOutreachEmailHtml(bodyText, signature);
 
@@ -134,6 +243,14 @@ export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmai
     html,
     replyTo: replyTo || undefined,
     tags: tags.length > 0 ? tags : undefined,
+    attachments: headshot
+      ? [{
+          content: headshot.content,
+          filename: headshot.filename,
+          contentType: headshot.contentType,
+          contentId: headshot.contentId,
+        }]
+      : undefined,
   });
 
   if (response.error) {

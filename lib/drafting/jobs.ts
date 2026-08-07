@@ -5,6 +5,7 @@ import {
   runProviderCallWithCostPersistence,
 } from '@/lib/drafting/cost-events';
 import { canQueueWrite, isMailboxDraftable } from '@/lib/drafting/eligibility';
+import { stripTrailingTextSignature } from '@/lib/drafting/email-signature';
 import {
   decideEmptyBriefExecution,
   EMPTY_BRIEF_RETRY_DELAY_MS,
@@ -1094,7 +1095,16 @@ async function persistDraftFromProvider(
 
   const lintStartedAt = Date.now();
   const subject = normalizeDraftText(writeResult.draft.subject).replace(/\n/g, ' ').trim();
-  const bodyText = normalizeDraftText(writeResult.draft.bodyText);
+  const sender = item.input_snapshot.sender;
+  // HTML signature is appended at send — never persist a duplicate text sign-off.
+  const bodyText = stripTrailingTextSignature(
+    normalizeDraftText(writeResult.draft.bodyText),
+    {
+      displayName: sender.displayName,
+      title: sender.title,
+      companyName: sender.companyName?.trim() || 'Helios Group',
+    },
+  );
   const grounding: DraftTemporalGrounding = {
     usedFactIds: writeResult.draft.usedFactIds,
     claimLedger: writeResult.draft.claimLedger,

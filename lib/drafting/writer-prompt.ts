@@ -199,11 +199,13 @@ ${JSON.stringify(buildWriterResearchBrief(input.packet), null, 2)}
 ${previous}${repairLint}${feedback}${lintGuide}
 Grounding requirements:
 - usedFactIds lists every research fact used in the email.
-- claimLedger has one entry for every complete prose sentence except the greeting, signoff, and signature name.
+- claimLedger has one entry for every complete prose sentence except the greeting.
 - exactText is the complete verbatim sentence from bodyText, including temporal words such as "recently", "upcoming", or "new role".
 - Every prospect_fact entry lists the exact research fact IDs supporting that sentence.
 - Sentences naming the prospect or company are prospect_fact, never sender_fact or relationship_fact.
 - temporalFraming declares how the sentence uses time. It must match the fact's permittedFraming from the research brief; use none only for sender/relationship claims.
+
+Do not write any signature or sign-off. bodyText must end on the ask (or the last prose sentence). Never append the sender's name, title, company, "Best,", "Regards,", or similar — the product adds an HTML signature after the body.
 
 Last check before you answer: re-read every sentence you wrote. One idea per sentence. Any sentence that joins several facts, appositions, or qualifying clauses must be split now, and checks.noStackedClauses must report honestly.
 Call report_draft_output with the finished email and complete grounding metadata.`;

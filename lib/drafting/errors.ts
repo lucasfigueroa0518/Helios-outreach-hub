@@ -44,3 +44,20 @@ export class DraftingExportBlockedError extends Error {
     this.blockers = blockers;
   }
 }
+
+export class EmailSendConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmailSendConfigurationError';
+  }
+}
+
+export class EmailSendProviderError extends Error {
+  readonly providerMessage: string;
+
+  constructor(message: string, providerMessage?: string) {
+    super(message);
+    this.name = 'EmailSendProviderError';
+    this.providerMessage = providerMessage ?? message;
+  }
+}

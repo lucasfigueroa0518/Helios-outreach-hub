@@ -128,24 +128,28 @@ export function hasFormulaInjectionRisk(value: string): boolean {
 }
 
 export type PreflightFinalDraftOptions = {
-  /** Export requires AgentMail-validated (or rate-limited) addresses; send does not. */
+  /** When true, require AgentMail-validated (or rate-limited) addresses. */
   requireMailboxDraftable?: boolean;
-  /** Export requires human approval; send does not. */
+  /** When true, require human approval. */
   requireApproved?: boolean;
-  /** Export blocks on hard lint; Resend send does not. */
+  /** When true, block on hard lint. */
   requireLintPass?: boolean;
-  /** Export blocks duplicate recipients/content; Resend send allows test-inbox fan-out. */
+  /** When true, block duplicate recipients/content. */
   requireUniqueRecipients?: boolean;
+  /** When true, require draft fingerprints to match current input/packet. */
+  requireFreshFingerprints?: boolean;
 };
 
 export function preflightFinalDraftExport(
   rows: ApprovedDraftExportRow[],
   options: PreflightFinalDraftOptions = {},
 ): { ok: true; meta: ExportPreflightMeta } | { ok: false; blockers: ExportBlocker[] } {
-  const requireMailboxDraftable = options.requireMailboxDraftable ?? true;
-  const requireApproved = options.requireApproved ?? true;
-  const requireLintPass = options.requireLintPass ?? true;
-  const requireUniqueRecipients = options.requireUniqueRecipients ?? true;
+  // Export defaults are intentionally lenient (CSV download should not gate on quality).
+  const requireMailboxDraftable = options.requireMailboxDraftable ?? false;
+  const requireApproved = options.requireApproved ?? false;
+  const requireLintPass = options.requireLintPass ?? false;
+  const requireUniqueRecipients = options.requireUniqueRecipients ?? false;
+  const requireFreshFingerprints = options.requireFreshFingerprints ?? false;
   if (rows.length === 0) {
     return {
       ok: false,
@@ -153,9 +157,7 @@ export function preflightFinalDraftExport(
         item_id: '',
         recipient: '',
         code: 'no_rows',
-        message: requireMailboxDraftable
-          ? 'No approved mailbox-valid drafts are available for export'
-          : 'No drafts are available to send',
+        message: 'No drafts are available to export',
       }],
     };
   }
@@ -190,7 +192,10 @@ export function preflightFinalDraftExport(
       continue;
     }
 
-    if (row.inputFingerprint !== row.draftInputFingerprint) {
+    if (
+      requireFreshFingerprints
+      && row.inputFingerprint !== row.draftInputFingerprint
+    ) {
       blockers.push({
         item_id: row.itemId,
         recipient,
@@ -200,7 +205,10 @@ export function preflightFinalDraftExport(
       continue;
     }
 
-    if (row.researchPacketSha256 !== row.draftResearchPacketSha256) {
+    if (
+      requireFreshFingerprints
+      && row.researchPacketSha256 !== row.draftResearchPacketSha256
+    ) {
       blockers.push({
         item_id: row.itemId,
         recipient,
@@ -293,7 +301,7 @@ export function preflightFinalDraftExport(
   };
 }
 
-/** Integrity checks for Resend send — no approval, mailbox, or lint/timeliness gate. */
+/** Integrity checks for Resend send — stricter than export on fingerprint freshness. */
 export function preflightFinalDraftSend(
   rows: ApprovedDraftExportRow[],
 ): ReturnType<typeof preflightFinalDraftExport> {
@@ -302,6 +310,7 @@ export function preflightFinalDraftSend(
     requireApproved: false,
     requireLintPass: false,
     requireUniqueRecipients: false,
+    requireFreshFingerprints: true,
   });
 }
 

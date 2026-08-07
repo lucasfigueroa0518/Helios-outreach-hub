@@ -35,10 +35,26 @@ export function campaignRampIntervalMs(): number {
   return positiveInt('DRAFTING_CAMPAIGN_RAMP_MS', 3_000, 60_000);
 }
 
-/** Stagger index 0 = immediate; 1 = one interval later, etc. */
+/** Max total stagger window for large batches (default 15 minutes). */
+export function campaignRampMaxWindowMs(): number {
+  return positiveInt('DRAFTING_CAMPAIGN_RAMP_MAX_MS', 15 * 60_000, 60 * 60_000);
+}
+
+/**
+ * Stagger index 0 = immediate. Small batches keep a linear 3s ramp for the
+ * first 20 jobs; larger indexes use sqrt compression and never exceed the
+ * max window so ~2000-lead queues still drain.
+ */
 export function campaignRampDelayMs(startIndex: number): number {
   if (startIndex <= 0) return 0;
-  return startIndex * campaignRampIntervalMs();
+  const interval = campaignRampIntervalMs();
+  const maxWindow = campaignRampMaxWindowMs();
+  if (startIndex <= 20) {
+    return Math.min(maxWindow, startIndex * interval);
+  }
+  const overflow = startIndex - 20;
+  const compressed = (20 * interval) + Math.round(Math.sqrt(overflow) * interval);
+  return Math.min(maxWindow, compressed);
 }
 
 export function scheduledProviderStartAt(startIndex: number, now = new Date()): Date {

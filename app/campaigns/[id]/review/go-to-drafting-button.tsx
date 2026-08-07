@@ -10,6 +10,7 @@ import {
 } from '@/app/campaigns/[id]/draft/drafting-launch-overlay';
 import { SenderSetupModal } from '@/app/campaigns/[id]/draft/sender-setup-modal';
 import type { SenderProfile } from '@/app/campaigns/[id]/draft/types';
+import { isSenderProfileSignatureReady } from '@/lib/drafting/email-signature';
 
 function idempotencyStorageKey(campaignId: string) {
   return `drafting-idempotency-${campaignId}`;
@@ -109,15 +110,6 @@ export function GoToDraftingButton({
 
   const runtimeBlocked = Boolean(readiness && !readiness.ready);
 
-  useEffect(() => {
-    if (!pending) return;
-    const timer = window.setTimeout(() => {
-      cancelLaunch();
-      setError('Starting drafting timed out — try again.');
-    }, 120_000);
-    return () => window.clearTimeout(timer);
-  }, [pending, cancelLaunch]);
-
   async function ensureProfileAndStart() {
     if (pending || runtimeBlocked) return;
     beginLaunch();
@@ -130,7 +122,8 @@ export function GoToDraftingButton({
         cancelLaunch();
         return;
       }
-      if (!profileData.profiles?.length) {
+      const profiles = (profileData.profiles ?? []) as SenderProfile[];
+      if (!profiles.some((profile) => isSenderProfileSignatureReady(profile))) {
         cancelLaunch();
         resumeAfterSender.current = true;
         setSenderModalOpen(true);

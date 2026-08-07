@@ -170,10 +170,14 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
     });
   }
 
+  const [rowWindow, setRowWindow] = useState(100);
+
   const loadSnapshot = useCallback(async () => {
     const sequence = ++requestSequence.current;
     try {
-      const response = await fetch(`/api/campaigns/${campaignId}/drafting`);
+      const response = await fetch(
+        `/api/campaigns/${campaignId}/drafting?limit=${rowWindow}&offset=0`,
+      );
       const data = await response.json();
       if (sequence !== requestSequence.current) return;
       if (!response.ok) {
@@ -201,7 +205,7 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
     }
-  }, [campaignId]);
+  }, [campaignId, rowWindow]);
 
   const rescueRun = useCallback(async () => {
     setRescueBusy(true);
@@ -587,12 +591,23 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
   }
 
   if (!snapshot?.workspace.id) {
+    if (pollError) {
+      return (
+        <div className="empty-state">
+          <strong>Couldn’t load this drafting workspace</strong>
+          <span>{pollError}</span>
+          <button type="button" className="btn btn--primary" onClick={() => void loadSnapshot()}>
+            Retry
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="empty-state">
         <strong>Drafting has not started yet</strong>
         <span>
-          Enrichment lives on Upload and Review — email drafts only exist after you click{' '}
-          <strong>Go to Drafting</strong> on the Review tab (that creates this workspace).
+          Email drafts only exist after you click <strong>Go to Drafting</strong> on the Review tab
+          (that creates this workspace).
         </span>
         <Link href={`/campaigns/${campaignId}/review`} className="btn btn--primary">
           Go to Review
@@ -703,6 +718,23 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
           onOptimisticApproveConfirm={confirmOptimisticLeadApprove}
         />
       )}
+
+      {(snapshot.email_rows.length + snapshot.leads_rows.length) < snapshot.counts.total ? (
+        <div className="drafting-load-more">
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={() => setRowWindow((current) => current + 100)}
+          >
+            Load more leads
+            {' '}
+            ({snapshot.email_rows.length + snapshot.leads_rows.length}
+            /
+            {snapshot.counts.total}
+            )
+          </button>
+        </div>
+      ) : null}
 
       {!snapshot.workspace.generation_complete || snapshot.activity.items.length > 0 || snapshot.counts.running > 0 ? (
         <DraftingActivityPanel snapshot={snapshot} />

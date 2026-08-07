@@ -7,8 +7,8 @@
       "name": "skill",
       "file": "first-contact-outreach-v5.md",
       "version": "v5.1",
-      "sha256": "34f15fdf26bc4772020af621a00f5069af7ec99e5b925698f5703d82c169844a",
-      "bytes": 17998
+      "sha256": "ec9de173ed595afcf23e66fe83a02f3b85726f3a5972e396447e9b4cdb0dab60",
+      "bytes": 18199
     },
     {
       "name": "subject-line",
@@ -21,9 +21,9 @@
       "name": "positioning",
       "file": "helios-positioning-v1.md",
       "version": "v1",
-      "sha256": "321865ba25a0a604ed067bee8230c995d1423a712fc0310fc1e99711c03a4725",
-      "bytes": 3063,
-      "textSha256": "321865ba25a0a604ed067bee8230c995d1423a712fc0310fc1e99711c03a4725"
+      "sha256": "fc4a577db3bf26935fed058c80e01871b14db28055fb1c004e5ebf56abd13641",
+      "bytes": 3228,
+      "textSha256": "fc4a577db3bf26935fed058c80e01871b14db28055fb1c004e5ebf56abd13641"
     },
     {
       "name": "positioning-pdf",

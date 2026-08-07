@@ -281,6 +281,41 @@ async function handleRunFinalize(
   }
   const { finalizeRunEnrichment } = await import('@/lib/enrichment');
   const domains = await finalizeRunEnrichment(runId);
+
+  // Late uploads: if drafting already started, fold newly enriched leads into
+  // the existing workspace so they queue alongside earlier sources.
+  let draftingSynced = 0;
+  try {
+    const runMeta = await dbQuery<{ campaign_id: string; user_id: string }>(
+      `SELECT campaign_id, user_id::text AS user_id FROM outreach.runs WHERE id = $1`,
+      [runId],
+    );
+    const meta = runMeta.rows[0];
+    if (meta) {
+      const workspace = await dbQuery<{ id: string }>(
+        `SELECT id FROM outreach.drafting_workspaces WHERE campaign_id = $1`,
+        [meta.campaign_id],
+      );
+      if (workspace.rows[0]) {
+        const { syncCampaignLeadsIntoDraftingWorkspace } = await import(
+          '@/lib/drafting/repository'
+        );
+        const { lateSyncIdempotencyKey } = await import('@/lib/drafting/late-sync');
+        const synced = await syncCampaignLeadsIntoDraftingWorkspace(
+          meta.campaign_id,
+          meta.user_id,
+          {
+            trigger: 'retry',
+            idempotencyKey: lateSyncIdempotencyKey(workspace.rows[0].id, runId),
+          },
+        );
+        draftingSynced = synced.created_items;
+      }
+    }
+  } catch {
+    // Keep finalize resilient — drafting sync failure must not block mailbox.
+  }
+
   const children: DispatchWork[] = domains.map((domain) =>
     child(
       'domain.verify',
@@ -296,7 +331,7 @@ async function handleRunFinalize(
     runId,
     { reviveTerminal: true },
   ));
-  return { children, result: { domains: domains.length } };
+  return { children, result: { domains: domains.length, drafting_synced: draftingSynced } };
 }
 
 async function handleDomainVerify(
@@ -347,6 +382,37 @@ async function handleMailboxRun(
   const { sweepPendingMailboxVerifications } = await import('@/lib/mailbox-verify');
   await sweepPendingMailboxVerifications(job.payload.runId);
   return { result: { scheduled: true } };
+}
+
+async function handlePreEnrichedIngest(
+  job: OrchestrationJob<'pre_enriched.ingest'>,
+): Promise<WorkHandlerResult> {
+  const { runPreEnrichedIngestCoordinator } = await import('@/lib/pre-enriched-ingest');
+  const { children } = await runPreEnrichedIngestCoordinator(job.payload);
+  return { children, result: { fanout: children.length } };
+}
+
+async function handlePreEnrichedExtractFile(
+  job: OrchestrationJob<'pre_enriched.extract_file'>,
+): Promise<WorkHandlerResult> {
+  const { runPreEnrichedExtractFile } = await import('@/lib/pre-enriched-ingest');
+  await runPreEnrichedExtractFile(job.payload);
+  return { result: { extracted: true } };
+}
+
+async function handlePreEnrichedAssemble(
+  job: OrchestrationJob<'pre_enriched.assemble'>,
+): Promise<WorkHandlerResult> {
+  const { runPreEnrichedAssemble } = await import('@/lib/pre-enriched-ingest');
+  const result = await runPreEnrichedAssemble(job.payload);
+  if (result.retry) {
+    throw new RetryableWorkError(
+      `Waiting for pre-enriched extracts on run ${job.payload.runId}`,
+      2_000,
+      'pre_enriched_extracts_pending',
+    );
+  }
+  return { result: { assembled: true } };
 }
 
 async function handleDraftingRunStart(
@@ -626,6 +692,9 @@ const HANDLERS: Record<WorkKind, Handler> = {
   'domain.verify': handleDomainVerify as Handler,
   'mailbox.lead': handleMailboxLead as Handler,
   'mailbox.run': handleMailboxRun as Handler,
+  'pre_enriched.ingest': handlePreEnrichedIngest as Handler,
+  'pre_enriched.extract_file': handlePreEnrichedExtractFile as Handler,
+  'pre_enriched.assemble': handlePreEnrichedAssemble as Handler,
   'drafting.run.start': handleDraftingRunStart as Handler,
   'drafting.job.verify_mailbox': handleDraftingJob as Handler,
   'drafting.job.process': handleDraftingJob as Handler,
@@ -644,7 +713,14 @@ export async function markTerminalWorkFailure(
   job: OrchestrationJob,
   message: string,
 ): Promise<void> {
-  if (!['run.process', 'run.prepare', 'run.enrich', 'run.finalize'].includes(job.kind)) return;
+  if (![
+    'run.process',
+    'run.prepare',
+    'run.enrich',
+    'run.finalize',
+    'pre_enriched.ingest',
+    'pre_enriched.assemble',
+  ].includes(job.kind)) return;
   const runId = (job.payload as { runId?: string }).runId;
   if (!runId) return;
   await dbQuery(

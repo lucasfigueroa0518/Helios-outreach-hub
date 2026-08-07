@@ -23,6 +23,9 @@ export const KIND_CONFIG: Record<WorkKind, KindConfig> = {
   'domain.verify': { lane: 'domain_verify', defaultMaxAttempts: 3, priority: 0 },
   'mailbox.lead': { lane: 'mailbox_verify', defaultMaxAttempts: 3, priority: 10 },
   'mailbox.run': { lane: 'mailbox_sweep', defaultMaxAttempts: 3, priority: 0 },
+  'pre_enriched.ingest': { lane: 'extraction', defaultMaxAttempts: 3, priority: 25 },
+  'pre_enriched.extract_file': { lane: 'extraction', defaultMaxAttempts: 3, priority: 30 },
+  'pre_enriched.assemble': { lane: 'extraction', defaultMaxAttempts: 1_000, priority: 10 },
   'drafting.run.start': { lane: 'drafting', defaultMaxAttempts: 3, priority: 30 },
   'drafting.job.verify_mailbox': { lane: 'mailbox_verify', defaultMaxAttempts: 3, priority: 20 },
   // Research occupies the drafting lane (default 8 shards). Writes use a

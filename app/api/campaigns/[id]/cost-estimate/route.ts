@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getCampaignCostEstimate } from '@/lib/cost-ledger';
+import { buildCampaignCostGate } from '@/lib/campaign-cost-cap';
+import { getCampaign } from '@/lib/campaigns';
 import { dbQuery } from '@/lib/db';
 import { getSession } from '@/lib/session';
 
@@ -40,12 +41,15 @@ export async function GET(_: NextRequest, { params }: RouteContext) {
   const { id } = await params;
 
   try {
+    const campaign = await getCampaign(session.userId, id);
+    if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
     const leadCount = await campaignLeadCount(id, session.userId);
-    const estimate = await getCampaignCostEstimate({
+    const gate = await buildCampaignCostGate({
       campaignId: id,
+      needsEnrichment: campaign.needs_enrichment,
       fallbackLeadCount: leadCount,
     });
-    return NextResponse.json(estimate);
+    return NextResponse.json({ ...gate.estimate, cost_gate: gate });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Unable to estimate campaign cost' },

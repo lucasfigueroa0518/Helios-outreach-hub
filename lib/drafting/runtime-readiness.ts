@@ -31,7 +31,7 @@ async function hasCompatibleDraftingSchema(): Promise<boolean> {
 }
 
 export async function getDraftingRuntimeReadiness(): Promise<DraftingRuntimeReadiness> {
-  const batchBudget = process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '30.0000';
+  const batchBudget = process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '50.0000';
   const concurrency = Math.max(1, Number(process.env.ORG_DRAFT_RESEARCH_CONCURRENCY ?? 4));
   const mode = process.env.DRAFTING_MODE ?? 'stub';
   const orchestrator = process.env.ORCHESTRATOR?.trim().toLowerCase() || 'postgres';

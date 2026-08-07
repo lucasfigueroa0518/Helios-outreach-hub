@@ -49,10 +49,16 @@ test('write lane limit reserves research headroom within provider budget', () =>
 });
 
 test('campaign cold-start ramp staggers pipeline starts', () => {
-  withEnv({ DRAFTING_CAMPAIGN_RAMP_MS: '3000' }, () => {
+  withEnv({
+    DRAFTING_CAMPAIGN_RAMP_MS: '3000',
+    DRAFTING_CAMPAIGN_RAMP_MAX_MS: String(15 * 60_000),
+  }, () => {
     assert.equal(campaignRampDelayMs(0), 0);
     assert.equal(campaignRampDelayMs(1), 3000);
     assert.equal(campaignRampDelayMs(4), 12000);
+    // Large batches compress and never exceed the max window.
+    assert.ok(campaignRampDelayMs(2000) <= 15 * 60_000);
+    assert.ok(campaignRampDelayMs(2000) < 2000 * 3000);
   });
 });
 

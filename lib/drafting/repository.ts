@@ -10,6 +10,10 @@ import { resolveCompanyResearchKey } from '@/lib/drafting/company-research-key';
 import { estimateResearchCost, worstCaseResearchReservationUsd } from '@/lib/drafting/cost';
 import { draftingCostEventKey, type DraftingCostStage } from '@/lib/drafting/cost-events';
 import {
+  isSenderProfileSignatureReady,
+  stripTrailingTextSignature,
+} from '@/lib/drafting/email-signature';
+import {
   DraftingConflictError,
   DraftingExportBlockedError,
   DraftingNotFoundError,
@@ -62,6 +66,7 @@ import {
 } from '@/lib/drafting/send';
 import { dispatchDraftingRunStarted, dispatchDraftingJobs } from '@/lib/drafting/transport';
 import { campaignRampDelayMs } from '@/lib/drafting/provider-admission';
+import { shouldDispatchJobsAfterLeadSync } from '@/lib/drafting/late-sync';
 import type { DraftingRescueAssessment } from '@/lib/drafting/rescue';
 import {
   hasBlockingHardLintFailures,
@@ -345,6 +350,20 @@ export type StartDraftingResult = {
   href: string;
   transport_warning?: string;
 };
+
+export type SyncDraftingLeadsResult = {
+  workspace_id: string;
+  drafting_run_id: string;
+  created_items: number;
+  mailbox_valid_total: number;
+  queued_items: number;
+  waiting_for_enrichment: number;
+  verifying_mailbox: number;
+  leads_attention: number;
+  transport_warning?: string;
+};
+
+export type SyncDraftingLeadsTrigger = 'go_to_drafting' | 'retry';
 
 // ── Owner helpers ───────────────────────────────────────────────────────────
 
@@ -699,15 +718,58 @@ function deliveryFromLeadVerification(
   };
 }
 
-async function loadWorkspaceItems(workspaceId: string): Promise<DbDraftingItemRow[]> {
+const WORKSPACE_PAGE_DEFAULT = 100;
+const WORKSPACE_PAGE_MAX = 250;
+const LEAD_SYNC_CHUNK = 150;
+
+async function loadWorkspaceItems(
+  workspaceId: string,
+  options: { limit?: number; offset?: number } = {},
+): Promise<DbDraftingItemRow[]> {
+  const hasPage = options.limit != null;
+  const limit = hasPage
+    ? Math.min(WORKSPACE_PAGE_MAX, Math.max(1, options.limit ?? WORKSPACE_PAGE_DEFAULT))
+    : null;
+  const offset = Math.max(0, options.offset ?? 0);
   const { rows } = await dbQuery<DbDraftingItemRow>(
-    `SELECT id, workspace_id, lead_id, ordinal, state, input_snapshot, input_overrides,
-            missing_fields, input_fingerprint, input_revision, delivery_snapshot,
-            review_status, removed_at, last_error_code, empty_brief_attempts,
-            empty_brief_input_fingerprint, empty_brief_last_at
-     FROM outreach.drafting_items
-     WHERE workspace_id = $1 AND removed_at IS NULL AND state <> 'removed'
-     ORDER BY ordinal`,
+    hasPage
+      ? `SELECT id, workspace_id, lead_id, ordinal, state, input_snapshot, input_overrides,
+                missing_fields, input_fingerprint, input_revision, delivery_snapshot,
+                review_status, removed_at, last_error_code, empty_brief_attempts,
+                empty_brief_input_fingerprint, empty_brief_last_at
+         FROM outreach.drafting_items
+         WHERE workspace_id = $1 AND removed_at IS NULL AND state <> 'removed'
+         ORDER BY ordinal
+         LIMIT $2 OFFSET $3`
+      : `SELECT id, workspace_id, lead_id, ordinal, state, input_snapshot, input_overrides,
+                missing_fields, input_fingerprint, input_revision, delivery_snapshot,
+                review_status, removed_at, last_error_code, empty_brief_attempts,
+                empty_brief_input_fingerprint, empty_brief_last_at
+         FROM outreach.drafting_items
+         WHERE workspace_id = $1 AND removed_at IS NULL AND state <> 'removed'
+         ORDER BY ordinal`,
+    hasPage ? [workspaceId, limit, offset] : [workspaceId],
+  );
+  return rows;
+}
+
+/** Lightweight rows for counter aggregation (no draft bodies). */
+async function loadWorkspaceItemStates(workspaceId: string): Promise<Array<{
+  id: string;
+  state: DraftingItemState;
+  delivery_snapshot: Record<string, unknown> | null;
+  removed_at: string | null;
+}>> {
+  const { rows } = await dbQuery<{
+    id: string;
+    state: DraftingItemState;
+    delivery_snapshot: Record<string, unknown> | null;
+    removed_at: string | null;
+  }>(
+    `SELECT id, state, delivery_snapshot, removed_at
+       FROM outreach.drafting_items
+      WHERE workspace_id = $1 AND removed_at IS NULL AND state <> 'removed'
+      ORDER BY ordinal`,
     [workspaceId],
   );
   return rows;
@@ -908,6 +970,36 @@ export async function getSenderProfileHeadshotPath(
   return rows[0]?.headshot_storage_path ?? null;
 }
 
+/** Resolve a sender headshot storage path from profile id and/or work email. */
+export async function resolveSenderHeadshotStoragePath(input: {
+  profileId?: string | null;
+  workEmail?: string | null;
+  headshotStoragePath?: string | null;
+}): Promise<string | null> {
+  const direct = input.headshotStoragePath?.trim();
+  if (direct) return direct;
+
+  const profileId = input.profileId?.trim();
+  if (profileId && /^[0-9a-f-]{36}$/i.test(profileId)) {
+    const fromId = await getSenderProfileHeadshotPath(profileId);
+    if (fromId) return fromId;
+  }
+
+  const workEmail = input.workEmail?.trim().toLowerCase();
+  if (!workEmail) return null;
+  const { rows } = await dbQuery<{ headshot_storage_path: string | null }>(
+    `SELECT headshot_storage_path
+       FROM outreach.sender_profiles
+      WHERE lower(work_email) = $1
+        AND headshot_storage_path IS NOT NULL
+        AND length(trim(headshot_storage_path)) > 0
+      ORDER BY is_default DESC, updated_at DESC
+      LIMIT 1`,
+    [workEmail],
+  );
+  return rows[0]?.headshot_storage_path?.trim() || null;
+}
+
 async function resolveSenderProfile(
   userId: string,
   senderProfileId?: string,
@@ -920,6 +1012,7 @@ async function resolveSenderProfile(
       [senderProfileId, userId],
     );
     if (!rows[0]) throw new DraftingNotFoundError('Sender profile not found');
+    assertSenderProfileSignatureReady(rows[0]);
     return rows[0];
   }
 
@@ -934,7 +1027,16 @@ async function resolveSenderProfile(
   if (!rows[0]) {
     throw new DraftingValidationError('Sender profile required', { sender_profile: 'required' });
   }
+  assertSenderProfileSignatureReady(rows[0]);
   return rows[0];
+}
+
+function assertSenderProfileSignatureReady(profile: SenderProfileRow): void {
+  if (isSenderProfileSignatureReady(profile)) return;
+  throw new DraftingValidationError(
+    'Sender profile requires name, position, and headshot before drafting',
+    { sender_profile: 'incomplete' },
+  );
 }
 
 function activityPhaseForState(state: DraftingItemState): WorkspaceActivityPhase | null {
@@ -1052,6 +1154,9 @@ export async function getWorkspaceSnapshot(
   options: {
     itemId?: string;
     filter?: 'to_review' | 'approved' | 'all_generated' | 'needs_attention';
+    /** Page size for email/leads rows (default 100). Pass 0 to load all (legacy). */
+    limit?: number;
+    offset?: number;
   } = {},
 ): Promise<WorkspaceSnapshot> {
   await assertCampaignOwned(campaignId, ownerId);
@@ -1127,7 +1232,24 @@ export async function getWorkspaceSnapshot(
     limit: GATE_WARM_BATCH_LIMIT,
   }).catch(() => 0);
 
-  const items = await loadWorkspaceItems(workspace.id);
+  const pageLimit = options.limit === 0
+    ? undefined
+    : Math.min(WORKSPACE_PAGE_MAX, Math.max(1, options.limit ?? WORKSPACE_PAGE_DEFAULT));
+  const pageOffset = Math.max(0, options.offset ?? 0);
+
+  // Counters over all items (light select); full rows only for the current page.
+  const allStates = await loadWorkspaceItemStates(workspace.id);
+  const counterInputs = allStates.map((item) => ({
+    state: item.state,
+    deliverySnapshot: parseDeliverySnapshot(item.delivery_snapshot),
+    removedAt: item.removed_at,
+  }));
+  const counters = computeDraftingCounters(counterInputs);
+
+  const items = await loadWorkspaceItems(
+    workspace.id,
+    pageLimit == null ? {} : { limit: pageLimit, offset: pageOffset },
+  );
   const drafts = await loadDraftsForItems(items.map((item) => item.id));
   const itemIds = items.map((item) => item.id);
   const sendStatuses = await loadLatestEmailSendStatuses(itemIds);
@@ -1141,12 +1263,6 @@ export async function getWorkspaceSnapshot(
       queueStatuses.get(item.id) ?? null,
     ),
   );
-  const counterInputs = items.map((item) => ({
-    state: item.state,
-    deliverySnapshot: parseDeliverySnapshot(item.delivery_snapshot),
-    removedAt: item.removed_at,
-  }));
-  const counters = computeDraftingCounters(counterInputs);
   const generationComplete = isGenerationComplete(counters.mailboxValidTotal, counters.drafted);
   const reviewComplete = isReviewComplete(counters.mailboxValidTotal, counters.approved);
 
@@ -1186,16 +1302,83 @@ export async function getWorkspaceSnapshot(
     }
   }
 
-  const nonLiveApproved = items.some((item) => {
-    if (item.state !== 'approved') return false;
-    const mode = drafts.get(item.id)?.generation_mode;
-    return mode === 'stub' || mode === 'legacy';
+  const { rows: sendAgg } = await dbQuery<{
+    sent: number;
+    delivered: number;
+    opened: number;
+    replied: number;
+    bounced: number;
+    pending_send: number;
+    non_live_approved: number;
+    non_live_sendable: number;
+  }>(
+    `SELECT
+       count(*) FILTER (WHERE s.status = 'sent')::int AS sent,
+       count(*) FILTER (WHERE s.delivered_at IS NOT NULL)::int AS delivered,
+       count(*) FILTER (WHERE s.opened_at IS NOT NULL)::int AS opened,
+       count(*) FILTER (WHERE s.replied_at IS NOT NULL)::int AS replied,
+       count(*) FILTER (WHERE s.bounced_at IS NOT NULL)::int AS bounced,
+       count(*) FILTER (
+         WHERE i.state IN ('generated', 'approved', 'sent')
+           AND d.drafting_item_id IS NOT NULL
+           AND coalesce(s.status, '') NOT IN ('sent', 'queued', 'sending')
+       )::int AS pending_send,
+       count(*) FILTER (
+         WHERE i.state = 'approved' AND d.generation_mode IN ('stub', 'legacy')
+       )::int AS non_live_approved,
+       count(*) FILTER (
+         WHERE i.state IN ('generated', 'approved', 'sent')
+           AND d.generation_mode IN ('stub', 'legacy')
+       )::int AS non_live_sendable
+     FROM outreach.drafting_items i
+     LEFT JOIN outreach.email_drafts d ON d.drafting_item_id = i.id
+     LEFT JOIN LATERAL (
+       SELECT status, delivered_at, opened_at, replied_at, bounced_at
+         FROM outreach.email_sends es
+        WHERE es.drafting_item_id = i.id
+        ORDER BY es.created_at DESC
+        LIMIT 1
+     ) s ON true
+     WHERE i.workspace_id = $1 AND i.removed_at IS NULL AND i.state <> 'removed'`,
+    [workspace.id],
+  ).catch(async () => {
+    // Fallback when email_sends shape differs — page-local counts.
+    return {
+      rows: [{
+        sent: summaries.filter((row) => row.draft?.send_status === 'sent').length,
+        delivered: summaries.filter((row) => row.draft?.delivered_at).length,
+        opened: summaries.filter((row) => row.draft?.opened_at).length,
+        replied: summaries.filter((row) => row.draft?.replied_at).length,
+        bounced: summaries.filter((row) => row.draft?.bounced_at).length,
+        pending_send: summaries.filter(
+          (row) => isDraftedState(row.state)
+            && row.draft
+            && row.draft.send_status !== 'sent'
+            && row.draft.send_status !== 'queued'
+            && row.draft.send_status !== 'sending',
+        ).length,
+        non_live_approved: items.filter((item) => {
+          if (item.state !== 'approved') return false;
+          const mode = drafts.get(item.id)?.generation_mode;
+          return mode === 'stub' || mode === 'legacy';
+        }).length,
+        non_live_sendable: items.filter((item) => {
+          if (!isDraftedState(item.state as DraftingItemState)) return false;
+          const mode = drafts.get(item.id)?.generation_mode;
+          return mode === 'stub' || mode === 'legacy';
+        }).length,
+      }],
+    };
   });
-  const nonLiveSendable = items.some((item) => {
-    if (!isDraftedState(item.state as DraftingItemState)) return false;
-    const mode = drafts.get(item.id)?.generation_mode;
-    return mode === 'stub' || mode === 'legacy';
-  });
+  const sentCount = sendAgg[0]?.sent ?? 0;
+  const deliveredCount = sendAgg[0]?.delivered ?? 0;
+  const openedCount = sendAgg[0]?.opened ?? 0;
+  const repliedCount = sendAgg[0]?.replied ?? 0;
+  const bouncedCount = sendAgg[0]?.bounced ?? 0;
+  const sendConfigured = isEmailSendConfigured();
+  const pendingSendCount = sendAgg[0]?.pending_send ?? 0;
+  const nonLiveApproved = (sendAgg[0]?.non_live_approved ?? 0) > 0;
+  const nonLiveSendable = (sendAgg[0]?.non_live_sendable ?? 0) > 0;
   const exportAvailable = counters.approved > 0 && !nonLiveApproved;
   const blockingReasons: string[] = [];
   if (counters.approved === 0) {
@@ -1205,20 +1388,6 @@ export async function getWorkspaceSnapshot(
       'Stub/legacy drafts cannot be exported — regenerate with DRAFTING_MODE=live',
     );
   }
-
-  const sentCount = summaries.filter((row) => row.draft?.send_status === 'sent').length;
-  const deliveredCount = summaries.filter((row) => row.draft?.delivered_at).length;
-  const openedCount = summaries.filter((row) => row.draft?.opened_at).length;
-  const repliedCount = summaries.filter((row) => row.draft?.replied_at).length;
-  const bouncedCount = summaries.filter((row) => row.draft?.bounced_at).length;
-  const sendConfigured = isEmailSendConfigured();
-  const pendingSendCount = summaries.filter(
-    (row) => isDraftedState(row.state)
-      && row.draft
-      && row.draft.send_status !== 'sent'
-      && row.draft.send_status !== 'queued'
-      && row.draft.send_status !== 'sending',
-  ).length;
   const sendBlockingReasons: string[] = [];
   if (!sendConfigured) {
     sendBlockingReasons.push('Add RESEND_API_KEY to .env.local to enable sending');
@@ -1251,7 +1420,7 @@ export async function getWorkspaceSnapshot(
     },
     activity,
     counts: {
-      total: items.length,
+      total: allStates.length,
       mailbox_valid_total: counters.mailboxValidTotal,
       running: counters.running,
       generated: counters.generated,
@@ -1297,115 +1466,64 @@ export async function getWorkspaceSnapshot(
 
 // ── Start / resume drafting ─────────────────────────────────────────────────
 
-export async function startDraftingWorkspace(
+/**
+ * Upsert all campaign_leads into an existing drafting workspace and queue
+ * research for newly eligible idle items. Does not create the workspace.
+ * When the workspace is paused, items are still upserted but jobs are not
+ * dispatched (matches reconcile pause behavior).
+ */
+export async function syncCampaignLeadsIntoDraftingWorkspace(
   campaignId: string,
   ownerId: string,
   input: {
-    senderProfileId?: string;
+    trigger?: SyncDraftingLeadsTrigger;
+    idempotencyKey: string;
     budgetCapUsd?: string;
-    idempotencyKey?: string;
+    senderProfileId?: string;
   },
-): Promise<StartDraftingResult> {
+): Promise<SyncDraftingLeadsResult> {
   await assertCampaignOwned(campaignId, ownerId);
 
-  const campaign = await dbQuery<{ id: string; status: string; name: string }>(
-    `SELECT id, status, name FROM outreach.campaigns WHERE id = $1 AND owner_id = $2`,
-    [campaignId, ownerId],
+  const workspace = await getOwnedWorkspace(campaignId, ownerId);
+  if (!workspace) {
+    throw new DraftingNotFoundError('Drafting workspace not found');
+  }
+
+  const trigger: SyncDraftingLeadsTrigger = input.trigger ?? 'retry';
+  const sender = await resolveSenderProfile(
+    ownerId,
+    input.senderProfileId ?? workspace.sender_profile_id ?? undefined,
   );
-  if (!campaign.rows[0]) throw new DraftingNotFoundError('Campaign not found');
-  if (campaign.rows[0].status !== 'active') {
-    throw new DraftingValidationError('Campaign must be active to start drafting');
-  }
-
-  const existingWorkspace = await dbQuery<{ status: string }>(
-    `SELECT status FROM outreach.drafting_workspaces WHERE campaign_id = $1`,
-    [campaignId],
-  );
-  if (existingWorkspace.rows[0]?.status === 'paused') {
-    throw new DraftingValidationError(
-      'Drafting workspace is paused — click Resume on the Draft page to continue',
-    );
-  }
-
-  // If enrichment already burned AgentMail rate limits, fail-open remaining
-  // pending/null verifications so this start queues research — not more probes.
-  {
-    const {
-      failOpenRemainingMailboxVerificationsForRun,
-      runHasMailboxRateLimit,
-    } = await import('@/lib/mailbox-verify');
-    const runRows = await dbQuery<{ run_id: string }>(
-      `SELECT DISTINCT run_id
-         FROM outreach.campaign_leads
-        WHERE campaign_id = $1 AND run_id IS NOT NULL`,
-      [campaignId],
-    );
-    for (const row of runRows.rows) {
-      if (await runHasMailboxRateLimit(row.run_id)) {
-        await failOpenRemainingMailboxVerificationsForRun(row.run_id);
-      }
-    }
-  }
-
-  const sender = await resolveSenderProfile(ownerId, input.senderProfileId);
   const assets = await loadDraftingAssets();
-  const idempotencyKey = input.idempotencyKey ?? randomUUID();
-  const budgetLimit = input.budgetCapUsd ?? process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '30.0000';
+  const budgetLimit = input.budgetCapUsd ?? process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '50.0000';
   const projected = estimateResearchCost();
+  const workspacePaused = !shouldDispatchJobsAfterLeadSync(workspace.status);
 
   const result = await dbTransaction(async (client) => {
-    const existingRun = await client.query<{ id: string }>(
-      `SELECT id FROM outreach.drafting_runs
-       WHERE triggered_by = $1 AND idempotency_key = $2`,
-      [ownerId, idempotencyKey],
-    );
-    if (existingRun.rows[0]) {
-      throw new DraftingConflictError('Idempotent drafting run already exists', 'idempotency_collision');
+    if (trigger === 'go_to_drafting') {
+      const existingRun = await client.query<{ id: string }>(
+        `SELECT id FROM outreach.drafting_runs
+         WHERE triggered_by = $1 AND idempotency_key = $2`,
+        [ownerId, input.idempotencyKey],
+      );
+      if (existingRun.rows[0]) {
+        throw new DraftingConflictError('Idempotent drafting run already exists', 'idempotency_collision');
+      }
     }
 
-    const workspaceUpsert = await client.query<DraftingWorkspaceRow>(
-      `INSERT INTO outreach.drafting_workspaces (
-         campaign_id, created_by, sender_profile_id, last_started_at,
-         skill_version, skill_sha256, positioning_version, positioning_sha256,
-         capability_catalog_version, capability_catalog_sha256
-       )
-       VALUES ($1, $2, $3, now(), $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (campaign_id) DO UPDATE
-         SET sender_profile_id = EXCLUDED.sender_profile_id,
-             last_started_at = now(),
-             skill_version = EXCLUDED.skill_version,
-             skill_sha256 = EXCLUDED.skill_sha256,
-             positioning_version = EXCLUDED.positioning_version,
-             positioning_sha256 = EXCLUDED.positioning_sha256,
-             capability_catalog_version = EXCLUDED.capability_catalog_version,
-             capability_catalog_sha256 = EXCLUDED.capability_catalog_sha256,
-             updated_at = now()
-       RETURNING id, campaign_id, status, updated_at, generation_completed_at,
-                 review_completed_at, sender_profile_id`,
-      [
-        campaignId,
-        ownerId,
-        sender.id,
-        assets.versions.skillVersion,
-        assets.versions.skillSha256,
-        assets.versions.positioningVersion,
-        assets.versions.positioningSha256,
-        assets.versions.capabilityCatalogVersion,
-        assets.versions.capabilityCatalogSha256,
-      ],
-    );
-    const workspace = workspaceUpsert.rows[0];
-
-    const run = await client.query<{ id: string }>(
+    const run = await client.query<{ id: string; inserted: boolean }>(
       `INSERT INTO outreach.drafting_runs (
          workspace_id, triggered_by, trigger, idempotency_key, target_count,
          projected_cost_low_usd, projected_cost_high_usd, budget_limit_usd
-       ) VALUES ($1, $2, 'go_to_drafting', $3, 0, $4::numeric, $5::numeric, $6::numeric)
-       RETURNING id`,
+       ) VALUES ($1, $2, $3, $4, 0, $5::numeric, $6::numeric, $7::numeric)
+       ON CONFLICT (triggered_by, idempotency_key) DO UPDATE
+         SET target_count = outreach.drafting_runs.target_count
+       RETURNING id, (xmax = 0) AS inserted`,
       [
         workspace.id,
         ownerId,
-        idempotencyKey,
+        trigger,
+        input.idempotencyKey,
         projected.lowUsd,
         projected.highUsd,
         budgetLimit,
@@ -1534,7 +1652,8 @@ export async function startDraftingWorkspace(
         [draftingRunId, itemId, lead.latest_run_id],
       );
 
-      if (persistedState === 'queued_research') {
+      // Paused workspaces still upsert items but do not enqueue research jobs.
+      if (!workspacePaused && persistedState === 'queued_research') {
         const active = await client.query<{ id: string }>(
           `SELECT id FROM outreach.drafting_jobs
             WHERE drafting_item_id = $1
@@ -1607,7 +1726,6 @@ export async function startDraftingWorkspace(
     );
 
     return {
-      workspace,
       draftingRunId,
       createdItems,
       mailboxValidTotal,
@@ -1620,40 +1738,58 @@ export async function startDraftingWorkspace(
   });
 
   let transportWarning: string | undefined;
-  try {
-    // Prefer explicit job dispatch — run.start would re-list the same pending
-    // set and double-enqueue under reviveTerminal.
-    if (result.pendingJobs.length > 0) {
-      await dispatchDraftingJobs(result.pendingJobs.map((job) => ({
-        id: job.id,
-        kind: job.kind as DraftingJobKind,
-        attempt_count: job.attempt_count,
-      })));
-    } else {
-      await dispatchDraftingRunStarted(result.draftingRunId);
+  console.info('[drafting_lead_sync]', JSON.stringify({
+    event: 'sync_complete',
+    campaignId,
+    workspaceId: workspace.id,
+    createdItems: result.createdItems,
+    queuedItems: result.queuedItems,
+    pendingJobs: result.pendingJobs.length,
+    at: new Date().toISOString(),
+  }));
+  if (!workspacePaused) {
+    try {
+      if (result.pendingJobs.length > 0) {
+        for (let i = 0; i < result.pendingJobs.length; i += LEAD_SYNC_CHUNK) {
+          const slice = result.pendingJobs.slice(i, i + LEAD_SYNC_CHUNK);
+          await dispatchDraftingJobs(slice.map((job) => ({
+            id: job.id,
+            kind: job.kind as DraftingJobKind,
+            attempt_count: job.attempt_count,
+          })));
+          console.info('[drafting_lead_sync]', JSON.stringify({
+            event: 'dispatch_chunk',
+            campaignId,
+            offset: i,
+            count: slice.length,
+            at: new Date().toISOString(),
+          }));
+        }
+      } else {
+        await dispatchDraftingRunStarted(result.draftingRunId);
+      }
+    } catch (error) {
+      transportWarning = error instanceof Error ? error.message : 'Job transport unavailable';
     }
-  } catch (error) {
-    transportWarning = error instanceof Error ? error.message : 'Job transport unavailable';
-  }
 
-  // Safety net: any idle eligible items still in Leads mode get queued now.
-  try {
-    const reconciled = await reconcileDraftingWorkspaceQueue({
-      workspaceId: result.workspace.id,
-      ownerId,
-      trigger: 'go_to_drafting',
-      idempotencyKey: `reconcile-go-to-drafting:${result.workspace.id}:${idempotencyKey}`,
-    });
-    if (reconciled.queued > 0) {
-      result.queuedItems += reconciled.queued;
+    try {
+      const reconciled = await reconcileDraftingWorkspaceQueue({
+        workspaceId: workspace.id,
+        ownerId,
+        trigger: trigger === 'go_to_drafting' ? 'go_to_drafting' : 'retry',
+        idempotencyKey: `reconcile-${trigger}:${workspace.id}:${input.idempotencyKey}`,
+      });
+      if (reconciled.queued > 0) {
+        result.queuedItems += reconciled.queued;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Drafting reconcile failed';
+      transportWarning = transportWarning ? `${transportWarning}; ${message}` : message;
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Drafting reconcile failed';
-    transportWarning = transportWarning ? `${transportWarning}; ${message}` : message;
   }
 
   return {
-    workspace_id: result.workspace.id,
+    workspace_id: workspace.id,
     drafting_run_id: result.draftingRunId,
     created_items: result.createdItems,
     mailbox_valid_total: result.mailboxValidTotal,
@@ -1661,11 +1797,121 @@ export async function startDraftingWorkspace(
     waiting_for_enrichment: result.waitingForEnrichment,
     verifying_mailbox: result.verifyingMailbox,
     leads_attention: result.leadsAttention,
+    ...(transportWarning ? { transport_warning: transportWarning } : {}),
+  };
+}
+
+export async function startDraftingWorkspace(
+  campaignId: string,
+  ownerId: string,
+  input: {
+    senderProfileId?: string;
+    budgetCapUsd?: string;
+    idempotencyKey?: string;
+  },
+): Promise<StartDraftingResult> {
+  await assertCampaignOwned(campaignId, ownerId);
+
+  const campaign = await dbQuery<{ id: string; status: string; name: string }>(
+    `SELECT id, status, name FROM outreach.campaigns WHERE id = $1 AND owner_id = $2`,
+    [campaignId, ownerId],
+  );
+  if (!campaign.rows[0]) throw new DraftingNotFoundError('Campaign not found');
+  if (campaign.rows[0].status !== 'active') {
+    throw new DraftingValidationError('Campaign must be active to start drafting');
+  }
+
+  const existingWorkspace = await dbQuery<{ status: string }>(
+    `SELECT status FROM outreach.drafting_workspaces WHERE campaign_id = $1`,
+    [campaignId],
+  );
+  if (existingWorkspace.rows[0]?.status === 'paused') {
+    throw new DraftingValidationError(
+      'Drafting workspace is paused — click Resume on the Draft page to continue',
+    );
+  }
+
+  // If enrichment already burned AgentMail rate limits, fail-open remaining
+  // pending/null verifications so this start queues research — not more probes.
+  {
+    const {
+      failOpenRemainingMailboxVerificationsForRun,
+      runHasMailboxRateLimit,
+    } = await import('@/lib/mailbox-verify');
+    const runRows = await dbQuery<{ run_id: string }>(
+      `SELECT DISTINCT run_id
+         FROM outreach.campaign_leads
+        WHERE campaign_id = $1 AND run_id IS NOT NULL`,
+      [campaignId],
+    );
+    for (const row of runRows.rows) {
+      if (await runHasMailboxRateLimit(row.run_id)) {
+        await failOpenRemainingMailboxVerificationsForRun(row.run_id);
+      }
+    }
+  }
+
+  const sender = await resolveSenderProfile(ownerId, input.senderProfileId);
+  const assets = await loadDraftingAssets();
+  const idempotencyKey = input.idempotencyKey ?? randomUUID();
+  const budgetLimit = input.budgetCapUsd ?? process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '50.0000';
+  const projected = estimateResearchCost();
+
+  await dbTransaction(async (client) => {
+    await client.query<DraftingWorkspaceRow>(
+      `INSERT INTO outreach.drafting_workspaces (
+         campaign_id, created_by, sender_profile_id, last_started_at,
+         skill_version, skill_sha256, positioning_version, positioning_sha256,
+         capability_catalog_version, capability_catalog_sha256
+       )
+       VALUES ($1, $2, $3, now(), $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (campaign_id) DO UPDATE
+         SET sender_profile_id = EXCLUDED.sender_profile_id,
+             last_started_at = now(),
+             skill_version = EXCLUDED.skill_version,
+             skill_sha256 = EXCLUDED.skill_sha256,
+             positioning_version = EXCLUDED.positioning_version,
+             positioning_sha256 = EXCLUDED.positioning_sha256,
+             capability_catalog_version = EXCLUDED.capability_catalog_version,
+             capability_catalog_sha256 = EXCLUDED.capability_catalog_sha256,
+             updated_at = now()
+       RETURNING id, campaign_id, status, updated_at, generation_completed_at,
+                 review_completed_at, sender_profile_id`,
+      [
+        campaignId,
+        ownerId,
+        sender.id,
+        assets.versions.skillVersion,
+        assets.versions.skillSha256,
+        assets.versions.positioningVersion,
+        assets.versions.positioningSha256,
+        assets.versions.capabilityCatalogVersion,
+        assets.versions.capabilityCatalogSha256,
+      ],
+    );
+  });
+
+  const synced = await syncCampaignLeadsIntoDraftingWorkspace(campaignId, ownerId, {
+    trigger: 'go_to_drafting',
+    idempotencyKey,
+    budgetCapUsd: budgetLimit,
+    senderProfileId: sender.id,
+  });
+
+  return {
+    workspace_id: synced.workspace_id,
+    drafting_run_id: synced.drafting_run_id,
+    created_items: synced.created_items,
+    mailbox_valid_total: synced.mailbox_valid_total,
+    queued_items: synced.queued_items,
+    waiting_for_enrichment: synced.waiting_for_enrichment,
+    verifying_mailbox: synced.verifying_mailbox,
+    leads_attention: synced.leads_attention,
     already_current: 0,
     projected_cost: { low_usd: projected.lowUsd, high_usd: projected.highUsd },
     budget: { limit_usd: budgetLimit, paused_items: 0 },
     href: `/campaigns/${campaignId}/draft`,
-    ...(transportWarning ? { transport_warning: transportWarning } : {}),
+    ...(synced.transport_warning ? { transport_warning: synced.transport_warning } : {}),
   };
 }
 
@@ -1879,7 +2125,7 @@ export async function approveDraftingLead(
         workspace.rows[0].id,
         ownerId,
         idempotencyKey,
-        process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '30.0000',
+        process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '50.0000',
       ],
     );
     const draftingRunId = run.rows[0].id;
@@ -2023,7 +2269,15 @@ export async function saveDraft(
 
   const existing = await loadDraftForItem(draftId);
   const subject = input.subject ?? existing?.subject ?? '';
-  const bodyText = normalizeDraftText(input.bodyText ?? existing?.body_text ?? '');
+  const sender = item.input_snapshot.sender;
+  const bodyText = stripTrailingTextSignature(
+    normalizeDraftText(input.bodyText ?? existing?.body_text ?? ''),
+    {
+      displayName: sender.displayName,
+      title: sender.title,
+      companyName: sender.companyName?.trim() || 'Helios Group',
+    },
+  );
   const currentRevision = Number(existing?.content_revision ?? 0);
 
   if (existing && currentRevision !== input.expectedContentRevision) {
@@ -2331,7 +2585,7 @@ async function loadDraftExportRows(
   ownerId: string,
   options: {
     approvedOnly: boolean;
-    /** Export/download enforce timeliness; Resend send does not. */
+    /** Optional timeliness gate (off for export and send). */
     requireTimeliness?: boolean;
   },
 ): Promise<{
@@ -2416,9 +2670,10 @@ async function loadApprovedExportRows(campaignId: string, ownerId: string): Prom
   rows: ApprovedDraftExportRow[];
   unresolvedLeads: number;
 }> {
+  // Export is intentionally more lenient than send: any drafted email, no timeliness gate.
   return loadDraftExportRows(campaignId, ownerId, {
-    approvedOnly: true,
-    requireTimeliness: true,
+    approvedOnly: false,
+    requireTimeliness: false,
   });
 }
 
@@ -3157,14 +3412,14 @@ export async function wakeParkedCompanyResearchSiblings(input: {
          workspace_id, triggered_by, trigger, idempotency_key, target_count, budget_limit_usd
        ) VALUES (
          $1, $2, 'retry', $3, 0,
-         coalesce($4::numeric, 30.0000)
+         coalesce($4::numeric, 50.0000)
        )
        RETURNING id`,
       [
         input.workspaceId,
         parked.rows[0].created_by,
         `wake-company:${input.workspaceId}:${input.companyKey}:${Date.now()}`,
-        process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '30.0000',
+        process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '50.0000',
       ],
     );
     draftingRunId = created.rows[0]?.id ?? null;
@@ -3700,7 +3955,7 @@ export async function reconcileDraftingWorkspaceQueue(input: {
     }>(
       `INSERT INTO outreach.drafting_runs (
          workspace_id, triggered_by, trigger, idempotency_key, target_count, budget_limit_usd
-       ) VALUES ($1, $2, $3, $4, 0, coalesce($5::numeric, 30.0000))
+       ) VALUES ($1, $2, $3, $4, 0, coalesce($5::numeric, 50.0000))
        ON CONFLICT (triggered_by, idempotency_key) DO UPDATE
          SET target_count = outreach.drafting_runs.target_count
        RETURNING id, budget_limit_usd::text, reserved_cost_usd::text, actual_cost_usd::text,
@@ -3710,7 +3965,7 @@ export async function reconcileDraftingWorkspaceQueue(input: {
         input.ownerId,
         input.trigger,
         input.idempotencyKey,
-        input.budgetLimitUsd ?? process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '30.0000',
+        input.budgetLimitUsd ?? process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '50.0000',
       ],
     );
     const draftingRunId = run.rows[0].id;

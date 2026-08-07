@@ -65,29 +65,24 @@ test('isEmailSendConfigured reflects RESEND_API_KEY presence', () => {
   }
 });
 
-test('preflightFinalDraftSend allows unverified mailbox when address is present', () => {
-  const row = sendReadyRow();
-  assert.equal(preflightFinalDraftExport([row]).ok, false);
-  assert.equal(preflightFinalDraftSend([row]).ok, true);
-});
-
-test('preflightFinalDraftSend allows ready_for_review without approval', () => {
-  const row = sendReadyRow({
-    state: 'ready_for_review',
-    reviewStatus: 'pending',
-  });
-  assert.equal(preflightFinalDraftExport([row]).ok, false);
-  assert.equal(preflightFinalDraftSend([row]).ok, true);
-});
-
-test('preflightFinalDraftSend allows hard lint failures that block export', () => {
+test('preflightFinalDraftExport is lenient on mailbox, approval, and lint', () => {
   const row = sendReadyRow({
     state: 'ready_for_review',
     reviewStatus: 'pending',
     lintHardCount: 3,
   });
-  assert.equal(preflightFinalDraftExport([row]).ok, false);
+  assert.equal(preflightFinalDraftExport([row]).ok, true);
   assert.equal(preflightFinalDraftSend([row]).ok, true);
+});
+
+test('preflightFinalDraftSend still requires fresh fingerprints; export does not', () => {
+  const row = sendReadyRow({
+    state: 'ready_for_review',
+    reviewStatus: 'pending',
+    draftInputFingerprint: 'stale-fp',
+  });
+  assert.equal(preflightFinalDraftExport([row]).ok, true);
+  assert.equal(preflightFinalDraftSend([row]).ok, false);
 });
 
 test('reply plus-address parses item id for inbound matching', () => {

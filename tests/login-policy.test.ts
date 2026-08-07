@@ -14,7 +14,7 @@ test('allowlist accepts heliosgroup.ai when configured', () => {
     assert.equal(isAllowedLoginEmail('lucas@heliosgroup.ai'), true);
     assert.equal(isAllowedLoginEmail('lucas@gmail.com'), false);
     assert.equal(isAllowedLoginEmail('not-an-email'), false);
-    assert.match(loginEmailPolicyMessage(), /heliosgroup\.ai/);
+    assert.match(loginEmailPolicyMessage(), /isn't authorized/i);
   } finally {
     if (previous === undefined) delete process.env.ALLOWED_EMAIL_DOMAINS;
     else process.env.ALLOWED_EMAIL_DOMAINS = previous;

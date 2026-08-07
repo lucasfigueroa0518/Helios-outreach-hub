@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server';
 
 import {
+  DraftingAssetHashMismatchError,
+  MissingDraftingAssetsError,
+} from '@/lib/drafting/assets';
+import {
   DraftingConflictError,
   DraftingExportBlockedError,
   DraftingNotFoundError,
   DraftingValidationError,
-} from '@/lib/drafting/errors';
-import {
   EmailSendConfigurationError,
   EmailSendProviderError,
-} from '@/lib/drafting/send';
+} from '@/lib/drafting/errors';
 
 const PRIVATE_CACHE = { 'Cache-Control': 'private, no-store' };
 
@@ -42,6 +44,21 @@ export function draftingErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof EmailSendProviderError) {
     return draftingJson({ error: error.message, code: 'send_failed' }, 502);
+  }
+  if (error instanceof DraftingAssetHashMismatchError) {
+    return draftingJson(
+      {
+        error: 'Drafting assets are out of sync. Ask an admin to run npm run drafting:sync-manifest.',
+        code: error.code,
+      },
+      422,
+    );
+  }
+  if (error instanceof MissingDraftingAssetsError) {
+    return draftingJson(
+      { error: 'Drafting assets are missing on the server.', code: 'assets_missing' },
+      503,
+    );
   }
   const message = error instanceof Error ? error.message : 'Unexpected error';
   return draftingJson({ error: message }, 500);

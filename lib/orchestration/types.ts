@@ -10,6 +10,9 @@ export const WORK_KINDS = [
   'domain.verify',
   'mailbox.lead',
   'mailbox.run',
+  'pre_enriched.ingest',
+  'pre_enriched.extract_file',
+  'pre_enriched.assemble',
   'drafting.run.start',
   'drafting.job.verify_mailbox',
   'drafting.job.process',
@@ -54,6 +57,27 @@ export type WorkPayloadMap = {
     email?: string;
   };
   'mailbox.run': { runId: string };
+  'pre_enriched.ingest': {
+    campaignId: string;
+    ownerId: string;
+    runId: string;
+    senderProfileId?: string;
+    idempotencyKey?: string;
+  };
+  'pre_enriched.extract_file': {
+    campaignId: string;
+    ownerId: string;
+    runId: string;
+    uploadId: string;
+  };
+  'pre_enriched.assemble': {
+    campaignId: string;
+    ownerId: string;
+    runId: string;
+    senderProfileId?: string;
+    idempotencyKey?: string;
+    filesTotal: number;
+  };
   'drafting.run.start': { draftingRunId: string };
   'drafting.job.verify_mailbox': { jobId: string };
   'drafting.job.process': { jobId: string };

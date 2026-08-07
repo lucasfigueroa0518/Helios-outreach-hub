@@ -8,14 +8,29 @@ import {
 } from '@/lib/drafting/errors';
 import { getDraftingRuntimeReadiness } from '@/lib/drafting/runtime-readiness';
 import {
-  ingestPreEnrichedCampaign,
+  acceptPreEnrichedIngest,
+  getPreEnrichedLaunchProgress,
   PreEnrichedIngestError,
 } from '@/lib/pre-enriched-ingest';
 import { getSession } from '@/lib/session';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 type RouteContext = { params: Promise<{ id: string }> };
+
+export async function GET(_request: NextRequest, { params }: RouteContext) {
+  const session = await getSession();
+  if (!session) return draftingJson({ error: 'Unauthorized' }, 401);
+
+  const { id: campaignId } = await params;
+  try {
+    const progress = await getPreEnrichedLaunchProgress(campaignId, session.userId);
+    return draftingJson({ progress });
+  } catch (error) {
+    return draftingErrorResponse(error);
+  }
+}
 
 export async function POST(request: NextRequest, { params }: RouteContext) {
   const session = await getSession();
@@ -48,7 +63,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
   }
 
   try {
-    const result = await ingestPreEnrichedCampaign(campaignId, session.userId, {
+    const result = await acceptPreEnrichedIngest(campaignId, session.userId, {
       senderProfileId: body.senderProfileId ?? body.sender_profile_id,
       idempotencyKey: body.idempotencyKey ?? body.idempotency_key,
     });

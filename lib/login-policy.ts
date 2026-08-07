@@ -36,18 +36,12 @@ export function isEmbarkEmail(email: string): boolean {
   return isAllowedLoginEmail(email);
 }
 
+/** User-facing denial copy — never names allowed domains (keeps allowlist private). */
 export function loginEmailPolicyMessage(): string {
   if (isOpenAllowlistForbidden()) {
-    return 'Login is misconfigured: ALLOWED_EMAIL_DOMAINS must be set in production.';
+    return 'Sign-in is temporarily unavailable. Please try again later.';
   }
-  const raw = process.env.ALLOWED_EMAIL_DOMAINS?.trim();
-  if (!raw || raw === '*') return 'Enter a valid email address to continue.';
-  const domains = raw
-    .split(',')
-    .map((d) => d.trim())
-    .filter(Boolean);
-  if (domains.length === 1) return `Only @${domains[0]} email addresses are allowed.`;
-  return `Only these email domains are allowed: ${domains.map((d) => `@${d}`).join(', ')}.`;
+  return "This account isn't authorized to sign in.";
 }
 
 export function displayNameFromEmail(email: string): string {
