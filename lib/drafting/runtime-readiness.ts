@@ -1,4 +1,5 @@
 import { dbQuery } from '@/lib/db';
+import { draftingMode } from '@/lib/drafting/mode';
 import { hasHealthyWorker } from '@/lib/orchestration/repository';
 
 /** Go-to-Drafting requires a healthy durable Postgres orchestration worker. */
@@ -33,7 +34,7 @@ async function hasCompatibleDraftingSchema(): Promise<boolean> {
 export async function getDraftingRuntimeReadiness(): Promise<DraftingRuntimeReadiness> {
   const batchBudget = process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '50.0000';
   const concurrency = Math.max(1, Number(process.env.ORG_DRAFT_RESEARCH_CONCURRENCY ?? 4));
-  const mode = process.env.DRAFTING_MODE ?? 'stub';
+  const mode = draftingMode();
   const orchestrator = process.env.ORCHESTRATOR?.trim().toLowerCase() || 'postgres';
   const blockers: string[] = [];
   let workerHealthy = false;
@@ -59,7 +60,7 @@ export async function getDraftingRuntimeReadiness(): Promise<DraftingRuntimeRead
     blockers.push('No healthy orchestration worker is running');
   }
   if (mode !== 'live') {
-    blockers.push('DRAFTING_MODE must be live for real drafting');
+    blockers.push('DRAFTING_MODE must be live for real drafting (set DRAFTING_MODE=live, or omit it in production)');
   }
 
   return {

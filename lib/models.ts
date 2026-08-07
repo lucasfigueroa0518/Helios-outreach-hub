@@ -3,6 +3,8 @@
  * no API call is made unless an operator explicitly sets
  * EXTRACTION_MODE=live after approving the expected cost.
  */
+import { draftingMode } from '@/lib/drafting/mode';
+
 export const EXTRACTION_MODEL = 'claude-sonnet-5';
 export const MAPPING_MODEL = 'claude-haiku-4-5-20251001';
 export const RESEARCH_MODEL = 'claude-sonnet-5';
@@ -111,7 +113,7 @@ export type DraftingMode = 'stub' | 'live';
 export type DraftingPromptCacheTtl = '5m' | '1h';
 
 export function getDraftingMode(): DraftingMode {
-  return process.env.DRAFTING_MODE === 'live' ? 'live' : 'stub';
+  return draftingMode();
 }
 
 export function assertLiveDraftingAllowed(): void {
