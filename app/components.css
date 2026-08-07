@@ -2775,6 +2775,9 @@ a.segmented__item { text-decoration: none; }
   align-items: center;
   gap: var(--space-3);
 }
+.drafting-sort-toggle {
+  margin-left: auto;
+}
 .drafting-leads-helper {
   margin: 0;
   font-size: var(--font-size-sm);

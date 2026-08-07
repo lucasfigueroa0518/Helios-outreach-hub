@@ -5,6 +5,10 @@ import { startTransition, useCallback, useEffect, useId, useRef, useState } from
 import { ChevronLeft, ChevronRight, Download, Pencil, RotateCcw, Send, X } from 'lucide-react';
 
 import type { DraftingItemRow, SenderProfile } from '@/app/campaigns/[id]/draft/types';
+import {
+  sortDraftRows,
+  type DraftSortMode,
+} from '@/lib/drafting/draft-review-order';
 import { formatNyDateLabel } from '@/lib/drafting/send-queue-schedule';
 
 function statusChipLabel(
@@ -60,6 +64,7 @@ const APPROVE_TOTAL_MS = 360;
 
 export function EmailReview({
   rows,
+  sortMode,
   currentItemId,
   sender,
   sends,
@@ -74,6 +79,7 @@ export function EmailReview({
   onDecision,
 }: {
   rows: DraftingItemRow[];
+  sortMode: DraftSortMode;
   currentItemId: string | null;
   sender: SenderProfile | null;
   sends: {
@@ -95,7 +101,10 @@ export function EmailReview({
   onRewriteQueued: (itemId: string) => void;
   onDecision: () => void;
 }) {
-  const reviewable = rows.filter((row) => row.draft && !['removed', 'waiting_for_enrichment'].includes(row.state));
+  const reviewable = sortDraftRows(
+    rows.filter((row) => row.draft && !['removed', 'waiting_for_enrichment'].includes(row.state)),
+    sortMode,
+  );
   const currentIndex = reviewable.findIndex((row) => row.id === currentItemId);
   const current = currentIndex >= 0 ? reviewable[currentIndex] : reviewable[0] ?? null;
 

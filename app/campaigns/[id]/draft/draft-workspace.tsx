@@ -13,8 +13,50 @@ import { EmailReview } from '@/app/campaigns/[id]/draft/email-review';
 import { ExportPanel, type ExportPulse } from '@/app/campaigns/[id]/draft/export-panel';
 import { LeadsTable } from '@/app/campaigns/[id]/draft/leads-table';
 import type { DraftingSnapshot, SenderProfile } from '@/app/campaigns/[id]/draft/types';
+import {
+  draftNeedsReview,
+  sortDraftRows,
+  type DraftSortMode,
+} from '@/lib/drafting/draft-review-order';
 
 type WorkspaceMode = 'email' | 'leads';
+
+function readDraftSortMode(campaignId: string): DraftSortMode {
+  if (typeof window === 'undefined') return 'review';
+  try {
+    const stored = window.localStorage.getItem(`drafting-sort-${campaignId}`);
+    if (stored === 'recency' || stored === 'review') return stored;
+  } catch {
+    // ignore storage failures
+  }
+  return 'review';
+}
+
+function persistDraftSortMode(campaignId: string, mode: DraftSortMode) {
+  try {
+    window.localStorage.setItem(`drafting-sort-${campaignId}`, mode);
+  } catch {
+    // ignore
+  }
+}
+
+function applySortMode(
+  campaignId: string,
+  mode: DraftSortMode,
+  setSortMode: (mode: DraftSortMode) => void,
+  emailRows: DraftingSnapshot['email_rows'],
+  setCurrentItemId: (id: string | null) => void,
+) {
+  setSortMode(mode);
+  persistDraftSortMode(campaignId, mode);
+  if (mode !== 'review') return;
+  const ordered = sortDraftRows(
+    emailRows.filter((row) => row.draft && !['removed', 'waiting_for_enrichment'].includes(row.state)),
+    'review',
+  );
+  const firstNeedsReview = ordered.find((row) => draftNeedsReview(row));
+  if (firstNeedsReview) setCurrentItemId(firstNeedsReview.id);
+}
 
 function pickCurrentItemId(snapshot: DraftingSnapshot, previousId: string | null) {
   if (previousId) {
@@ -32,6 +74,7 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
   const [snapshot, setSnapshot] = useState<DraftingSnapshot | null>(null);
   const [launching, setLaunching] = useState(() => readDraftingLaunch(campaignId));
   const [mode, setMode] = useState<WorkspaceMode>('email');
+  const [sortMode, setSortMode] = useState<DraftSortMode>(() => readDraftSortMode(campaignId));
   const [currentItemId, setCurrentItemId] = useState<string | null>(null);
   const [sender, setSender] = useState<SenderProfile | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
@@ -672,6 +715,40 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
             {leadsAttention > 0 ? <span className="drafting-attention-dot" aria-hidden="true" /> : null}
           </button>
         </div>
+        {mode === 'email' ? (
+          <div className="segmented drafting-sort-toggle" role="group" aria-label="Sort drafts">
+            <button
+              type="button"
+              className={`segmented__item${sortMode === 'review' ? ' segmented__item--active' : ''}`}
+              aria-pressed={sortMode === 'review'}
+              title="Unreviewed drafts first; downloaded or sent move to the back"
+              onClick={() => applySortMode(
+                campaignId,
+                'review',
+                setSortMode,
+                snapshot.email_rows,
+                setCurrentItemId,
+              )}
+            >
+              Review
+            </button>
+            <button
+              type="button"
+              className={`segmented__item${sortMode === 'recency' ? ' segmented__item--active' : ''}`}
+              aria-pressed={sortMode === 'recency'}
+              title="Newest drafts first"
+              onClick={() => applySortMode(
+                campaignId,
+                'recency',
+                setSortMode,
+                snapshot.email_rows,
+                setCurrentItemId,
+              )}
+            >
+              Recency
+            </button>
+          </div>
+        ) : null}
         {mode === 'email' && leadsAttention > 0 ? (
           <p className="drafting-leads-helper" role="status">
             Leads require mailbox verification before drafting
@@ -683,6 +760,7 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
         <>
           <EmailReview
             rows={snapshot.email_rows}
+            sortMode={sortMode}
             currentItemId={currentItemId}
             sender={sender}
             sends={snapshot.sends}

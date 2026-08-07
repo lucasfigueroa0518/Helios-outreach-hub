@@ -32,6 +32,7 @@ export type DraftingItemRow = {
     lint_warnings: number;
     retry_suggested: boolean;
     lint_hard_codes: string[];
+    generated_at: string | null;
     temporal_status: 'verified' | 'context_only' | 'blocked' | 'unknown';
     export_quality_ready: boolean;
     send_status: 'unsent' | 'queued' | 'sending' | 'sent' | 'failed';

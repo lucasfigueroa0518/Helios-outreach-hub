@@ -85,7 +85,7 @@ export function ExportPanel({
               {sentCount > 0
                 ? ` · ${deliveredCount} delivered · ${openedCount} opened · ${repliedCount} replied${bouncedCount > 0 ? ` · ${bouncedCount} bounced` : ''}`
                 : ''}
-              {' · '}{pendingSendCount} ready to send
+              {' · '}{pendingSendCount} ready (no retry)
               {typeof sendState.queued_count === 'number' && sendState.queued_count > 0
                 ? ` · ${sendState.queued_count} queued`
                 : ''}
@@ -167,7 +167,11 @@ export function ExportPanel({
               })();
             }}
           >
-            {bulkSendState === 'sending' ? 'Sending…' : `Send ${pendingSendCount} draft${pendingSendCount === 1 ? '' : 's'}`}
+            {bulkSendState === 'sending'
+              ? 'Sending…'
+              : pendingSendCount > 0
+                ? `Send All Ready (${pendingSendCount})`
+                : 'Send All Ready'}
           </button>
           <a
             className={`btn btn--primary${exportState.available ? '' : ' btn--disabled-link'}`}

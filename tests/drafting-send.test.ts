@@ -38,6 +38,7 @@ function sendReadyRow(overrides: Partial<ApprovedDraftExportRow> = {}): Approved
     contentRevision: 1,
     groundingStatus: 'ok',
     lintHardCount: 0,
+    retrySuggested: false,
     deliverySnapshot: {
       effectiveEmail: 'lead@example.com',
       effectiveEmailFingerprint: 'fp-email',

@@ -68,6 +68,7 @@ import { dispatchDraftingRunStarted, dispatchDraftingJobs } from '@/lib/drafting
 import { campaignRampDelayMs } from '@/lib/drafting/provider-admission';
 import { shouldDispatchJobsAfterLeadSync } from '@/lib/drafting/late-sync';
 import type { DraftingRescueAssessment } from '@/lib/drafting/rescue';
+import { isReadyForBulkSend } from '@/lib/drafting/draft-review-order';
 import {
   hasBlockingHardLintFailures,
   hasRetrySuggestedLint,
@@ -186,6 +187,7 @@ type DbDraftRow = {
   temporal_status: 'verified' | 'context_only' | 'blocked';
   temporal_audit: ResearchTimelinessAudit | Record<string, unknown>;
   generation_mode: DraftGenerationMode;
+  generated_at: string | null;
 };
 
 export class DraftingTimelinessError extends Error {
@@ -238,6 +240,8 @@ export type DraftingItemSummary = {
     /** Soft quality issues remain (e.g. overloaded sentence) — show Retry suggested. */
     retry_suggested: boolean;
     lint_hard_codes: string[];
+    /** When the draft content was last generated (for recency sort). */
+    generated_at: string | null;
     /** Cached research temporal audit status (warmed on snapshot / reconcile). */
     temporal_status: 'verified' | 'context_only' | 'blocked' | 'unknown';
     /** True when live draft currently passes export quality gates (lint + temporal). */
@@ -553,6 +557,7 @@ function summarizeItem(
           lint_warnings: lint.warnings.length,
           retry_suggested: hasRetrySuggestedLint(lint),
           lint_hard_codes: lint.hard.map((finding) => finding.code),
+          generated_at: draft.generated_at ?? null,
           temporal_status: temporalStatus === 'verified'
             || temporalStatus === 'context_only'
             || temporalStatus === 'blocked'
@@ -781,7 +786,8 @@ async function loadDraftsForItems(itemIds: string[]): Promise<Map<string, DbDraf
   const { rows } = await dbQuery<DbDraftRow>(
     `SELECT drafting_item_id, subject, body_text, content_revision, input_fingerprint,
             research_packet_sha256, grounding_status, lint_result, used_fact_ids,
-            claim_ledger, draft_grounding, temporal_status, temporal_audit, generation_mode
+            claim_ledger, draft_grounding, temporal_status, temporal_audit, generation_mode,
+            generated_at::text
        FROM outreach.email_drafts
       WHERE drafting_item_id = ANY($1::uuid[])`,
     [itemIds],
@@ -1319,9 +1325,20 @@ export async function getWorkspaceSnapshot(
        count(*) FILTER (WHERE s.replied_at IS NOT NULL)::int AS replied,
        count(*) FILTER (WHERE s.bounced_at IS NOT NULL)::int AS bounced,
        count(*) FILTER (
-         WHERE i.state IN ('generated', 'approved', 'sent')
+         WHERE i.state IN ('ready_for_review', 'approved')
            AND d.drafting_item_id IS NOT NULL
            AND coalesce(s.status, '') NOT IN ('sent', 'queued', 'sending')
+           AND NOT EXISTS (
+             SELECT 1
+               FROM outreach.email_send_queue q
+              WHERE q.drafting_item_id = i.id
+                AND q.status IN ('queued', 'sending')
+           )
+           AND NOT EXISTS (
+             SELECT 1
+               FROM jsonb_array_elements(coalesce(d.lint_result -> 'hard', '[]'::jsonb)) AS finding
+              WHERE finding->>'code' = 'OVERLOADED_SENTENCE'
+           )
        )::int AS pending_send,
        count(*) FILTER (
          WHERE i.state = 'approved' AND d.generation_mode IN ('stub', 'legacy')
@@ -1351,11 +1368,12 @@ export async function getWorkspaceSnapshot(
         replied: summaries.filter((row) => row.draft?.replied_at).length,
         bounced: summaries.filter((row) => row.draft?.bounced_at).length,
         pending_send: summaries.filter(
-          (row) => isDraftedState(row.state)
-            && row.draft
-            && row.draft.send_status !== 'sent'
-            && row.draft.send_status !== 'queued'
-            && row.draft.send_status !== 'sending',
+          (row) => row.draft
+            && isReadyForBulkSend({
+              state: row.state,
+              retrySuggested: row.draft.retry_suggested,
+              sendStatus: row.draft.send_status,
+            }),
         ).length,
         non_live_approved: items.filter((item) => {
           if (item.state !== 'approved') return false;
@@ -1396,7 +1414,7 @@ export async function getWorkspaceSnapshot(
       'Stub/legacy drafts cannot be sent — regenerate with DRAFTING_MODE=live',
     );
   } else if (pendingSendCount === 0) {
-    sendBlockingReasons.push('No unsent drafts remain');
+    sendBlockingReasons.push('No ready drafts to send (retry-suggested drafts are skipped)');
   }
   const sendAvailable = sendConfigured
     && !nonLiveSendable
@@ -2654,6 +2672,7 @@ async function loadDraftExportRows(
       contentRevision: Number(draft.content_revision),
       groundingStatus: draft.grounding_status,
       lintHardCount: lint.hard.filter((finding) => !isRetrySuggestedLintCode(finding.code)).length,
+      retrySuggested: hasRetrySuggestedLint(lint),
     }));
   }
 
@@ -2916,7 +2935,12 @@ export async function sendCampaignApprovedDrafts(
     throw new EmailSendConfigurationError('RESEND_API_KEY is not configured');
   }
 
-  const { rows } = await loadSendableDraftRows(campaignId, ownerId);
+  const { rows: allRows } = await loadSendableDraftRows(campaignId, ownerId);
+  // Send All Ready: only drafts without retry-suggested soft lint.
+  const rows = allRows.filter((row) => isReadyForBulkSend({
+    state: row.state,
+    retrySuggested: row.retrySuggested,
+  }));
   const sendStatuses = await loadLatestEmailSendStatuses(rows.map((row) => row.itemId));
   const activeQueue = await loadActiveQueueByItemIds(rows.map((row) => row.itemId));
   const unsentRows = rows.filter(
@@ -2927,11 +2951,17 @@ export async function sendCampaignApprovedDrafts(
     (row) => sendStatuses.get(row.itemId)?.status !== 'sent'
       && activeQueue.has(row.itemId),
   );
-  const skipped = rows.length - unsentRows.length - alreadyQueued.length;
+  const skipped = allRows.length - unsentRows.length - alreadyQueued.length;
 
-  const preflight = preflightFinalDraftSend(unsentRows);
-  if (!preflight.ok) {
-    throw new DraftingExportBlockedError(preflight.blockers, 'Campaign send is not ready');
+  if (unsentRows.length === 0 && alreadyQueued.length === 0) {
+    throw new DraftingValidationError('No ready drafts to send');
+  }
+
+  if (unsentRows.length > 0) {
+    const preflight = preflightFinalDraftSend(unsentRows);
+    if (!preflight.ok) {
+      throw new DraftingExportBlockedError(preflight.blockers, 'Campaign send is not ready');
+    }
   }
 
   let remaining = await todayRemaining(ownerId);

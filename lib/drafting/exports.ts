@@ -68,6 +68,8 @@ export type ApprovedDraftExportRow = {
   contentRevision: number;
   groundingStatus: string;
   lintHardCount: number;
+  /** Soft quality issues remain (e.g. overloaded sentence) — exclude from Send All Ready. */
+  retrySuggested: boolean;
   deliverySnapshot: DeliverySnapshot | null;
 };
 
@@ -464,6 +466,7 @@ export function mapApprovedExportRow(input: {
   contentRevision: number;
   groundingStatus: string;
   lintHardCount: number;
+  retrySuggested?: boolean;
 }): ApprovedDraftExportRow {
   const fullName = normalizeRequiredField(input.snapshot.lead.fullName) ?? '';
   const firstName = extractFirstName(fullName) ?? '';
@@ -494,6 +497,7 @@ export function mapApprovedExportRow(input: {
     contentRevision: input.contentRevision,
     groundingStatus: input.groundingStatus,
     lintHardCount: input.lintHardCount,
+    retrySuggested: Boolean(input.retrySuggested),
     deliverySnapshot: input.deliverySnapshot,
   };
 }
