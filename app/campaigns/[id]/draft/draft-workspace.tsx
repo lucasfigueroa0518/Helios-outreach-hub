@@ -759,6 +759,7 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
       {mode === 'email' ? (
         <>
           <EmailReview
+            campaignId={campaignId}
             rows={snapshot.email_rows}
             sortMode={sortMode}
             currentItemId={currentItemId}
@@ -783,7 +784,6 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
             snapshot={snapshot}
             exportPulse={exportPulse}
             onSwitchToLeads={() => setMode('leads')}
-            onRefresh={() => void loadSnapshot()}
           />
         </>
       ) : (

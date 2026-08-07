@@ -11,25 +11,25 @@ export type ExportPulse = {
   approvedCount: number;
 } | null;
 
+/**
+ * Download visual guide — only appears after the user downloads a draft for
+ * export. Sending lives on the draft card; this panel is the export queue.
+ */
 export function ExportPanel({
   campaignId,
   snapshot,
   exportPulse,
   onSwitchToLeads,
-  onRefresh,
 }: {
   campaignId: string;
   snapshot: DraftingSnapshot;
   exportPulse: ExportPulse;
   onSwitchToLeads: () => void;
-  onRefresh: () => void;
 }) {
-  const { exports: exportState, sends: sendState, counts, workspace } = snapshot;
+  const { exports: exportState, counts } = snapshot;
   const unresolvedLeads = counts.leads_attention + counts.verifying_mailbox + counts.waiting_for_enrichment;
   const [pulseVisible, setPulseVisible] = useState(false);
   const [pulseKey, setPulseKey] = useState(0);
-  const [bulkSendState, setBulkSendState] = useState<'idle' | 'sending' | 'error'>('idle');
-  const [bulkSendMessage, setBulkSendMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!exportPulse) return;
@@ -39,19 +39,14 @@ export function ExportPanel({
     return () => window.clearTimeout(timer);
   }, [exportPulse]);
 
-  if (!workspace.generation_complete && counts.generated === 0) return null;
-
   const exportReadyCount = counts.approved;
-  const sentCount = counts.sent;
-  const deliveredCount = counts.delivered ?? 0;
-  const openedCount = counts.opened ?? 0;
-  const repliedCount = counts.replied ?? 0;
-  const bouncedCount = counts.bounced ?? 0;
-  const pendingSendCount = sendState.pending;
-  const generatedForReview = Math.max(counts.generated, exportReadyCount);
-  const exportPct = generatedForReview > 0
-    ? Math.min(100, Math.round((exportReadyCount / generatedForReview) * 100))
-    : 0;
+  // Stay visible briefly after a download toast even if the optimistic count
+  // has not landed yet; otherwise only show once something is queued for export.
+  const showGuide = exportReadyCount > 0 || pulseVisible;
+  if (!showGuide) return null;
+
+  const generatedForReview = Math.max(counts.generated, exportReadyCount, 1);
+  const exportPct = Math.min(100, Math.round((exportReadyCount / generatedForReview) * 100));
 
   return (
     <section
@@ -61,19 +56,19 @@ export function ExportPanel({
       <div className="card__header">
         <div>
           <div className="card__title" id="drafting-export-heading">
-            {exportState.available ? 'Ready to export' : 'Review progress'}
+            {exportState.available ? 'Ready to export' : 'Export queue'}
           </div>
           <div className="card__subtitle">
-            {exportState.available
-              ? `${counts.approved} downloaded draft${counts.approved === 1 ? '' : 's'} will be exported.`
-              : exportState.blocking_reasons.join(' · ')}
+            {exportReadyCount === 0
+              ? 'Downloaded drafts land here for CSV or Cowork export.'
+              : `${exportReadyCount} downloaded draft${exportReadyCount === 1 ? '' : 's'} ready to export.`}
           </div>
         </div>
       </div>
       <div className="card__body drafting-export__body">
         <div className="drafting-export__queue" aria-live="polite">
           <div className="drafting-export__queue-head">
-            <span className="drafting-export__queue-label">Export queue</span>
+            <span className="drafting-export__queue-label">Downloaded</span>
             <strong
               key={`approved-${exportReadyCount}-${pulseKey}`}
               className={`drafting-export__queue-count${pulseVisible ? ' drafting-export__queue-count--bump' : ''}`}
@@ -81,24 +76,14 @@ export function ExportPanel({
               {exportReadyCount}
             </strong>
             <span className="drafting-export__queue-meta">
-              downloaded · {sentCount} sent
-              {sentCount > 0
-                ? ` · ${deliveredCount} delivered · ${openedCount} opened · ${repliedCount} replied${bouncedCount > 0 ? ` · ${bouncedCount} bounced` : ''}`
-                : ''}
-              {' · '}{pendingSendCount} ready (no retry)
-              {typeof sendState.queued_count === 'number' && sendState.queued_count > 0
-                ? ` · ${sendState.queued_count} queued`
-                : ''}
-              {typeof sendState.today_remaining === 'number'
-                ? ` · ${sendState.today_remaining} left today`
-                : ''}
+              of {generatedForReview} generated
             </span>
           </div>
           <div
             className="drafting-export__queue-track"
             role="progressbar"
             aria-valuemin={0}
-            aria-valuemax={generatedForReview || 1}
+            aria-valuemax={generatedForReview}
             aria-valuenow={exportReadyCount}
             aria-valuetext={`${exportReadyCount} of ${generatedForReview} drafts downloaded for export`}
           >
@@ -117,7 +102,7 @@ export function ExportPanel({
             </p>
           ) : (
             <p className="drafting-export__queue-hint">
-              Each download lands here and can be exported immediately.
+              Use Download on a draft to add it here, then export when you are ready.
             </p>
           )}
         </div>
@@ -130,49 +115,8 @@ export function ExportPanel({
             </button>
           </p>
         ) : null}
+
         <div className="drafting-export__actions">
-          <button
-            type="button"
-            className={`btn btn--primary${sendState.available ? '' : ' btn--disabled-link'}`}
-            disabled={!sendState.available || bulkSendState === 'sending'}
-            onClick={() => {
-              if (!sendState.available || bulkSendState === 'sending') return;
-              setBulkSendState('sending');
-              setBulkSendMessage(null);
-              void (async () => {
-                try {
-                  const response = await fetch(`/api/campaigns/${campaignId}/drafting/send`, {
-                    method: 'POST',
-                  });
-                  const data = await response.json().catch(() => ({}));
-                  if (!response.ok) {
-                    setBulkSendState('error');
-                    setBulkSendMessage(typeof data.error === 'string' ? data.error : 'Send failed');
-                    onRefresh();
-                    return;
-                  }
-                  setBulkSendState('idle');
-                  const parts = [
-                    data.sent ? `Sent ${data.sent} now` : null,
-                    data.queued ? `Queued ${data.queued}` : null,
-                    data.failed ? `${data.failed} failed` : null,
-                  ].filter(Boolean);
-                  setBulkSendMessage(parts.length > 0 ? parts.join(' · ') : 'Nothing to send');
-                  onRefresh();
-                } catch (error) {
-                  setBulkSendState('error');
-                  setBulkSendMessage(error instanceof Error ? error.message : 'Send failed');
-                  onRefresh();
-                }
-              })();
-            }}
-          >
-            {bulkSendState === 'sending'
-              ? 'Sending…'
-              : pendingSendCount > 0
-                ? `Send All Ready (${pendingSendCount})`
-                : 'Send All Ready'}
-          </button>
           <a
             className={`btn btn--primary${exportState.available ? '' : ' btn--disabled-link'}`}
             href={exportState.available ? `/api/campaigns/${campaignId}/drafting/export?type=mail` : undefined}
@@ -194,19 +138,6 @@ export function ExportPanel({
             Export Claude Cowork prompt
           </a>
         </div>
-        {bulkSendMessage ? (
-          <p className="text-muted drafting-export__timestamp" role="status">{bulkSendMessage}</p>
-        ) : null}
-        {!sendState.configured ? (
-          <p className="text-muted drafting-export__timestamp">
-            Add RESEND_API_KEY to .env.local to enable sending.
-          </p>
-        ) : null}
-        {workspace.review_complete ? (
-          <p className="text-muted drafting-export__timestamp">
-            Last updated {new Date(workspace.updated_at).toLocaleString()}
-          </p>
-        ) : null}
       </div>
     </section>
   );

@@ -3095,7 +3095,32 @@ a.segmented__item { text-decoration: none; }
   padding: var(--space-4) var(--space-5) var(--space-5);
   border-top: 1px solid var(--color-border);
 }
+.drafting-email-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
 .drafting-email-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.drafting-send-all {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+.drafting-send-all__btn {
+  min-height: 44px;
+  white-space: nowrap;
+}
+.drafting-send-all__status {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-align: right;
+}
+.drafting-send-all__status--error { color: var(--color-negative); }
 .drafting-send-note { margin: 0; font-size: var(--font-size-xs); color: var(--color-text-muted); }
 .drafting-retry-hint {
   margin: 0;

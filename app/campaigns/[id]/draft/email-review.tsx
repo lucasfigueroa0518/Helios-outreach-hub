@@ -63,6 +63,7 @@ const APPROVE_PEAK_MS = 180;
 const APPROVE_TOTAL_MS = 360;
 
 export function EmailReview({
+  campaignId,
   rows,
   sortMode,
   currentItemId,
@@ -78,6 +79,7 @@ export function EmailReview({
   onRewriteQueued,
   onDecision,
 }: {
+  campaignId: string;
   rows: DraftingItemRow[];
   sortMode: DraftSortMode;
   currentItemId: string | null;
@@ -122,6 +124,8 @@ export function EmailReview({
   const [rewriteJustLanded, setRewriteJustLanded] = useState(false);
   const [sendState, setSendState] = useState<'idle' | 'sending' | 'error'>('idle');
   const [sendError, setSendError] = useState<string | null>(null);
+  const [bulkSendState, setBulkSendState] = useState<'idle' | 'sending' | 'error'>('idle');
+  const [bulkSendMessage, setBulkSendMessage] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const subjectRef = useRef<HTMLInputElement>(null);
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
@@ -486,6 +490,38 @@ export function EmailReview({
         onRefresh();
       } finally {
         inFlightRef.current.delete(itemId);
+      }
+    })();
+  }
+
+  function sendAllReady() {
+    if (!sends.available || bulkSendState === 'sending') return;
+    setBulkSendState('sending');
+    setBulkSendMessage(null);
+    void (async () => {
+      try {
+        const response = await fetch(`/api/campaigns/${campaignId}/drafting/send`, {
+          method: 'POST',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setBulkSendState('error');
+          setBulkSendMessage(typeof data.error === 'string' ? data.error : 'Send failed');
+          onRefresh();
+          return;
+        }
+        setBulkSendState('idle');
+        const parts = [
+          data.sent ? `Sent ${data.sent} now` : null,
+          data.queued ? `Queued ${data.queued}` : null,
+          data.failed ? `${data.failed} failed` : null,
+        ].filter(Boolean);
+        setBulkSendMessage(parts.length > 0 ? parts.join(' · ') : 'Nothing to send');
+        onRefresh();
+      } catch (error) {
+        setBulkSendState('error');
+        setBulkSendMessage(error instanceof Error ? error.message : 'Send failed');
+        onRefresh();
       }
     })();
   }
@@ -924,72 +960,101 @@ export function EmailReview({
         {actionError ? (
           <p className="drafting-action-error" role="alert">{actionError}</p>
         ) : null}
-        <div className="drafting-email-actions">
-          <button
-            type="button"
-            className="drafting-icon-btn drafting-icon-btn--quiet"
-            aria-label={editing ? 'Finish editing' : 'Edit draft (E)'}
-            title={editing ? 'Finish editing' : 'Edit (E)'}
-            disabled={approveFlash || sendFlash || rewriting}
-            onClick={toggleEditing}
-          >
-            <Pencil size={16} />
-          </button>
-          <button
-            type="button"
-            className="drafting-icon-btn drafting-icon-btn--quiet"
-            aria-label="Download for export (D)"
-            title="Download for export (D)"
-            disabled={!decidable}
-            onClick={approve}
-          >
-            <Download size={16} />
-          </button>
-          <button
-            type="button"
-            className="drafting-icon-btn drafting-icon-btn--deny"
-            aria-label="Deny and try again (R)"
-            title="Deny and try again (R)"
-            disabled={!decidable}
-            onClick={denyRewrite}
-          >
-            <RotateCcw size={16} />
-          </button>
-          {isQueued && current.draft.send_status === 'queued' ? (
-            <>
+        <div className="drafting-email-actions-row">
+          <div className="drafting-email-actions">
+            <button
+              type="button"
+              className="drafting-icon-btn drafting-icon-btn--quiet"
+              aria-label={editing ? 'Finish editing' : 'Edit draft (E)'}
+              title={editing ? 'Finish editing' : 'Edit (E)'}
+              disabled={approveFlash || sendFlash || rewriting}
+              onClick={toggleEditing}
+            >
+              <Pencil size={16} />
+            </button>
+            <button
+              type="button"
+              className="drafting-icon-btn drafting-icon-btn--quiet"
+              aria-label="Download for export (D)"
+              title="Download for export (D)"
+              disabled={!decidable}
+              onClick={approve}
+            >
+              <Download size={16} />
+            </button>
+            <button
+              type="button"
+              className="drafting-icon-btn drafting-icon-btn--deny"
+              aria-label="Deny and try again (R)"
+              title="Deny and try again (R)"
+              disabled={!decidable}
+              onClick={denyRewrite}
+            >
+              <RotateCcw size={16} />
+            </button>
+            {isQueued && current.draft.send_status === 'queued' ? (
+              <>
+                <button
+                  type="button"
+                  className="drafting-icon-btn drafting-icon-btn--send"
+                  aria-label="Send queued email now"
+                  title={(sends.today_remaining ?? 0) > 0 ? 'Send now' : 'No slots remaining today'}
+                  disabled={(sends.today_remaining ?? 0) < 1 || sendFlash}
+                  onClick={sendQueuedDraftNow}
+                >
+                  <Send size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="drafting-icon-btn drafting-icon-btn--deny"
+                  aria-label="Cancel queued send"
+                  title="Cancel queued send"
+                  onClick={cancelQueuedDraft}
+                >
+                  <X size={16} />
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 className="drafting-icon-btn drafting-icon-btn--send"
-                aria-label="Send queued email now"
-                title={(sends.today_remaining ?? 0) > 0 ? 'Send now' : 'No slots remaining today'}
-                disabled={(sends.today_remaining ?? 0) < 1 || sendFlash}
-                onClick={sendQueuedDraftNow}
+                aria-label="Send email"
+                aria-describedby={sendDisabledReason ? sendDisabledReasonId : undefined}
+                title={canSend ? 'Send via Resend' : sendDisabledReason ?? 'Send'}
+                disabled={!canSend}
+                onClick={sendCurrentDraft}
               >
                 <Send size={16} />
               </button>
-              <button
-                type="button"
-                className="drafting-icon-btn drafting-icon-btn--deny"
-                aria-label="Cancel queued send"
-                title="Cancel queued send"
-                onClick={cancelQueuedDraft}
-              >
-                <X size={16} />
-              </button>
-            </>
-          ) : (
+            )}
+          </div>
+          <div className="drafting-send-all">
             <button
               type="button"
-              className="drafting-icon-btn drafting-icon-btn--send"
-              aria-label="Send email"
-              aria-describedby={sendDisabledReason ? sendDisabledReasonId : undefined}
-              title={canSend ? 'Send via Resend' : sendDisabledReason ?? 'Send'}
-              disabled={!canSend}
-              onClick={sendCurrentDraft}
+              className="btn btn--primary drafting-send-all__btn"
+              disabled={!sends.available || bulkSendState === 'sending' || sends.pending < 1}
+              title={
+                !sends.configured
+                  ? 'Add RESEND_API_KEY to enable sending'
+                  : sends.pending < 1
+                    ? 'No ready drafts to send (retry-suggested drafts are skipped)'
+                    : `Send ${sends.pending} ready email${sends.pending === 1 ? '' : 's'} via Resend`
+              }
+              onClick={sendAllReady}
             >
-              <Send size={16} />
+              {bulkSendState === 'sending'
+                ? 'Sending…'
+                : `Send ${sends.pending} Ready Email${sends.pending === 1 ? '' : 's'}`}
             </button>
-          )}
+            {bulkSendMessage ? (
+              <p
+                className={`drafting-send-all__status${bulkSendState === 'error' ? ' drafting-send-all__status--error' : ''}`}
+                role="status"
+              >
+                {bulkSendMessage}
+              </p>
+            ) : null}
+          </div>
         </div>
         {showFeedback ? (
           <div
