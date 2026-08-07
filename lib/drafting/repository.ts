@@ -46,11 +46,19 @@ import {
   preflightFinalDraftSend,
 } from '@/lib/drafting/exports';
 import {
-  createResendClient,
+  DAILY_SEND_CAP,
+  enqueueOverflowBatch,
+  enqueueOverflowSend,
+  executeImmediateResend,
+  loadActiveQueueByItemIds,
+  ownerQueueStats,
+  todayRemaining,
+  type ActiveQueueInfo,
+} from '@/lib/drafting/send-queue';
+import {
   EmailSendConfigurationError,
   EmailSendProviderError,
   isEmailSendConfigured,
-  sendOutreachEmail,
 } from '@/lib/drafting/send';
 import { dispatchDraftingRunStarted, dispatchDraftingJobs } from '@/lib/drafting/transport';
 import { campaignRampDelayMs } from '@/lib/drafting/provider-admission';
@@ -223,7 +231,9 @@ export type DraftingItemSummary = {
     temporal_status: 'verified' | 'context_only' | 'blocked' | 'unknown';
     /** True when live draft currently passes export quality gates (lint + temporal). */
     export_quality_ready: boolean;
-    send_status: 'unsent' | 'sent' | 'failed';
+    send_status: 'unsent' | 'queued' | 'sending' | 'sent' | 'failed';
+    queue_id: string | null;
+    schedule_date: string | null;
     sent_at: string | null;
     send_error: string | null;
     engagement: EmailEngagementLifecycle;
@@ -307,6 +317,9 @@ export type WorkspaceSnapshot = {
     available: boolean;
     blocking_reasons: string[];
     pending: number;
+    today_remaining: number;
+    queued_count: number;
+    next_schedule_date: string | null;
   };
   rescue: DraftingRescueAssessment;
 };
@@ -471,39 +484,11 @@ async function loadLatestEmailSendStatuses(
   }]));
 }
 
-async function recordEmailSend(input: {
-  itemId: string;
-  status: 'sent' | 'failed';
-  fromEmail: string;
-  toEmail: string;
-  subject: string;
-  providerMessageId?: string | null;
-  providerRfcMessageId?: string | null;
-  errorMessage?: string | null;
-}): Promise<void> {
-  await dbQuery(
-    `INSERT INTO outreach.email_sends (
-       drafting_item_id, provider, provider_message_id, provider_rfc_message_id, status,
-       from_email, to_email, subject, error_message, sent_at
-     ) VALUES ($1, 'resend', $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [
-      input.itemId,
-      input.providerMessageId ?? null,
-      input.providerRfcMessageId ?? null,
-      input.status,
-      input.fromEmail,
-      input.toEmail,
-      input.subject,
-      input.errorMessage ?? null,
-      input.status === 'sent' ? new Date().toISOString() : null,
-    ],
-  );
-}
-
 function summarizeItem(
   item: DbDraftingItemRow,
   draft: DbDraftRow | null,
   sendStatus: EmailSendRecord | null = null,
+  queueInfo: ActiveQueueInfo | null = null,
 ): DraftingItemSummary {
   const snapshot = item.input_snapshot;
   const effective = buildEffectiveLeadFields(snapshot, item.input_overrides);
@@ -551,9 +536,15 @@ function summarizeItem(
           export_quality_ready: exportQualityReady,
           send_status: sendStatus?.status === 'sent'
             ? 'sent'
-            : sendStatus?.status === 'failed'
-              ? 'failed'
-              : 'unsent',
+            : queueInfo?.status === 'sending'
+              ? 'sending'
+              : queueInfo
+                ? 'queued'
+                : sendStatus?.status === 'failed'
+                  ? 'failed'
+                  : 'unsent',
+          queue_id: queueInfo?.queue_id ?? null,
+          schedule_date: queueInfo?.schedule_date ?? null,
           sent_at: sendStatus?.sent_at ?? null,
           send_error: sendStatus?.error_message ?? null,
           engagement: deriveEmailEngagementLifecycle(sendStatus),
@@ -1070,6 +1061,9 @@ export async function getWorkspaceSnapshot(
         available: false,
         blocking_reasons: ['Workspace has not been started'],
         pending: 0,
+        today_remaining: DAILY_SEND_CAP,
+        queued_count: 0,
+        next_schedule_date: null,
       },
       rescue: {
         needed: false,
@@ -1093,10 +1087,17 @@ export async function getWorkspaceSnapshot(
 
   const items = await loadWorkspaceItems(workspace.id);
   const drafts = await loadDraftsForItems(items.map((item) => item.id));
-  const sendStatuses = await loadLatestEmailSendStatuses(items.map((item) => item.id));
+  const itemIds = items.map((item) => item.id);
+  const sendStatuses = await loadLatestEmailSendStatuses(itemIds);
+  const queueStatuses = await loadActiveQueueByItemIds(itemIds);
 
   const summaries = items.map((item) =>
-    summarizeItem(item, drafts.get(item.id) ?? null, sendStatuses.get(item.id) ?? null),
+    summarizeItem(
+      item,
+      drafts.get(item.id) ?? null,
+      sendStatuses.get(item.id) ?? null,
+      queueStatuses.get(item.id) ?? null,
+    ),
   );
   const counterInputs = items.map((item) => ({
     state: item.state,
@@ -1170,7 +1171,11 @@ export async function getWorkspaceSnapshot(
   const bouncedCount = summaries.filter((row) => row.draft?.bounced_at).length;
   const sendConfigured = isEmailSendConfigured();
   const pendingSendCount = summaries.filter(
-    (row) => isDraftedState(row.state) && row.draft && row.draft.send_status !== 'sent',
+    (row) => isDraftedState(row.state)
+      && row.draft
+      && row.draft.send_status !== 'sent'
+      && row.draft.send_status !== 'queued'
+      && row.draft.send_status !== 'sending',
   ).length;
   const sendBlockingReasons: string[] = [];
   if (!sendConfigured) {
@@ -1190,6 +1195,7 @@ export async function getWorkspaceSnapshot(
   // Dynamic import avoids a runtime cycle (rescue → reconcileDraftingWorkspaceQueue).
   const { resolveRescueForUi } = await import('@/lib/drafting/rescue');
   const rescue = await resolveRescueForUi(campaignId, ownerId, workspace.id);
+  const queueStats = await ownerQueueStats(ownerId);
 
   return {
     workspace: {
@@ -1239,6 +1245,9 @@ export async function getWorkspaceSnapshot(
       available: sendAvailable,
       blocking_reasons: sendBlockingReasons,
       pending: pendingSendCount,
+      today_remaining: queueStats.today_remaining,
+      queued_count: queueStats.queued_count,
+      next_schedule_date: queueStats.next_schedule_date,
     },
     rescue,
   };
@@ -2485,14 +2494,18 @@ export async function exportUnverifiedLeadsCsv(campaignId: string, ownerId: stri
 export type DraftSendResult = {
   item_id: string;
   recipient: string;
-  status: 'sent' | 'failed' | 'skipped';
+  status: 'sent' | 'failed' | 'skipped' | 'queued';
   provider_message_id?: string;
   error?: string;
+  queue_id?: string;
+  schedule_date?: string;
 };
 
-async function sendApprovedExportRow(
+async function dispatchDraftSend(
   row: ApprovedDraftExportRow,
   campaignId: string,
+  ownerId: string,
+  options: { forceImmediate?: boolean } = {},
 ): Promise<DraftSendResult> {
   const recipient = row.toFullName || row.toEmail;
   const sendStatuses = await loadLatestEmailSendStatuses([row.itemId]);
@@ -2505,57 +2518,60 @@ async function sendApprovedExportRow(
     };
   }
 
-  try {
-    const result = await sendOutreachEmail({
+  const activeQueue = await loadActiveQueueByItemIds([row.itemId]);
+  const existing = activeQueue.get(row.itemId);
+  if (existing) {
+    return {
+      item_id: row.itemId,
+      recipient,
+      status: 'queued',
+      queue_id: existing.queue_id,
+      schedule_date: existing.schedule_date,
+    };
+  }
+
+  const remaining = options.forceImmediate ? 1 : await todayRemaining(ownerId);
+  if (remaining > 0) {
+    const result = await executeImmediateResend({
+      itemId: row.itemId,
+      campaignId,
       fromName: row.fromName,
       fromEmail: row.fromEmail,
       toEmail: row.toEmail,
       subject: row.subject,
       bodyText: row.bodyText,
-      itemId: row.itemId,
-      campaignId,
     });
-
-    let providerRfcMessageId: string | null = null;
-    try {
-      const details = await createResendClient().emails.get(result.providerMessageId);
-      providerRfcMessageId = details.data?.message_id?.trim() || null;
-    } catch {
-      // RFC Message-ID often arrives on the first delivery webhook instead.
+    if (result.status === 'sent') {
+      return {
+        item_id: row.itemId,
+        recipient,
+        status: 'sent',
+        provider_message_id: result.providerMessageId,
+      };
     }
-
-    await recordEmailSend({
-      itemId: row.itemId,
-      status: 'sent',
-      fromEmail: row.fromEmail,
-      toEmail: row.toEmail,
-      subject: row.subject,
-      providerMessageId: result.providerMessageId,
-      providerRfcMessageId,
-    });
-    return {
-      item_id: row.itemId,
-      recipient,
-      status: 'sent',
-      provider_message_id: result.providerMessageId,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await recordEmailSend({
-      itemId: row.itemId,
-      status: 'failed',
-      fromEmail: row.fromEmail,
-      toEmail: row.toEmail,
-      subject: row.subject,
-      errorMessage: message,
-    });
     return {
       item_id: row.itemId,
       recipient,
       status: 'failed',
-      error: message,
+      error: result.error,
     };
   }
+
+  const queued = await enqueueOverflowSend({
+    ownerId,
+    itemId: row.itemId,
+    campaignId,
+    toEmail: row.toEmail,
+    subject: row.subject,
+    recipientName: recipient,
+  });
+  return {
+    item_id: row.itemId,
+    recipient,
+    status: 'queued',
+    queue_id: queued.id,
+    schedule_date: queued.schedule_date,
+  };
 }
 
 export async function sendApprovedDraft(itemId: string, ownerId: string): Promise<DraftSendResult> {
@@ -2575,7 +2591,7 @@ export async function sendApprovedDraft(itemId: string, ownerId: string): Promis
     throw new DraftingExportBlockedError(preflight.blockers, 'Draft is not ready to send');
   }
 
-  const result = await sendApprovedExportRow(row, campaignId);
+  const result = await dispatchDraftSend(row, campaignId, ownerId);
   if (result.status === 'skipped') {
     throw new DraftingConflictError(result.error ?? 'Already sent', 'already_sent');
   }
@@ -2592,6 +2608,7 @@ export async function sendCampaignApprovedDrafts(
   sent: number;
   failed: number;
   skipped: number;
+  queued: number;
   results: DraftSendResult[];
 }> {
   if (!isEmailSendConfigured()) {
@@ -2600,23 +2617,77 @@ export async function sendCampaignApprovedDrafts(
 
   const { rows } = await loadSendableDraftRows(campaignId, ownerId);
   const sendStatuses = await loadLatestEmailSendStatuses(rows.map((row) => row.itemId));
-  const unsentRows = rows.filter((row) => sendStatuses.get(row.itemId)?.status !== 'sent');
-  const skipped = rows.length - unsentRows.length;
+  const activeQueue = await loadActiveQueueByItemIds(rows.map((row) => row.itemId));
+  const unsentRows = rows.filter(
+    (row) => sendStatuses.get(row.itemId)?.status !== 'sent'
+      && !activeQueue.has(row.itemId),
+  );
+  const alreadyQueued = rows.filter(
+    (row) => sendStatuses.get(row.itemId)?.status !== 'sent'
+      && activeQueue.has(row.itemId),
+  );
+  const skipped = rows.length - unsentRows.length - alreadyQueued.length;
 
   const preflight = preflightFinalDraftSend(unsentRows);
   if (!preflight.ok) {
     throw new DraftingExportBlockedError(preflight.blockers, 'Campaign send is not ready');
   }
 
+  let remaining = await todayRemaining(ownerId);
   const results: DraftSendResult[] = [];
+
+  for (const row of alreadyQueued) {
+    const existing = activeQueue.get(row.itemId)!;
+    results.push({
+      item_id: row.itemId,
+      recipient: row.toFullName || row.toEmail,
+      status: 'queued',
+      queue_id: existing.queue_id,
+      schedule_date: existing.schedule_date,
+    });
+  }
+
+  const overflow: ApprovedDraftExportRow[] = [];
   for (const row of unsentRows) {
-    results.push(await sendApprovedExportRow(row, campaignId));
+    if (remaining > 0) {
+      const result = await dispatchDraftSend(row, campaignId, ownerId, { forceImmediate: true });
+      results.push(result);
+      if (result.status === 'sent') remaining -= 1;
+    } else {
+      overflow.push(row);
+    }
+  }
+
+  if (overflow.length > 0) {
+    const queuedRows = await enqueueOverflowBatch(
+      ownerId,
+      overflow.map((row) => ({
+        ownerId,
+        itemId: row.itemId,
+        campaignId,
+        toEmail: row.toEmail,
+        subject: row.subject,
+        recipientName: row.toFullName || row.toEmail,
+      })),
+    );
+    for (let i = 0; i < overflow.length; i += 1) {
+      const row = overflow[i]!;
+      const queued = queuedRows[i]!;
+      results.push({
+        item_id: row.itemId,
+        recipient: row.toFullName || row.toEmail,
+        status: 'queued',
+        queue_id: queued.id,
+        schedule_date: queued.schedule_date,
+      });
+    }
   }
 
   return {
     sent: results.filter((result) => result.status === 'sent').length,
     failed: results.filter((result) => result.status === 'failed').length,
     skipped,
+    queued: results.filter((result) => result.status === 'queued').length,
     results,
   };
 }

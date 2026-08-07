@@ -9,6 +9,8 @@ out/
 .env
 .env.local
 .env.*.local
+scripts/gcp/worker.env
+scripts/gcp/.deploy-env
 SUPABASE.txt
 
 # vercel

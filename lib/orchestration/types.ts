@@ -14,6 +14,7 @@ export const WORK_KINDS = [
   'drafting.job.verify_mailbox',
   'drafting.job.process',
   'drafting.job.write',
+  'email.send',
   'system.reconcile',
 ] as const;
 
@@ -30,6 +31,7 @@ export const WORK_LANES = [
   'mailbox_sweep',
   'drafting',
   'drafting_write',
+  'email_send',
   'maintenance',
 ] as const;
 
@@ -56,6 +58,7 @@ export type WorkPayloadMap = {
   'drafting.job.verify_mailbox': { jobId: string };
   'drafting.job.process': { jobId: string };
   'drafting.job.write': { jobId: string };
+  'email.send': { queueId: string };
   'system.reconcile': { reason?: string };
 };
 

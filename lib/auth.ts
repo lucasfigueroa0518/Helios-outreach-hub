@@ -1,5 +1,5 @@
 import { dbQuery } from '@/lib/db';
-import { displayNameFromEmail } from '@/lib/session';
+import { displayNameFromEmail } from '@/lib/login-policy';
 
 export type OutreachUser = {
   id: string;
@@ -7,7 +7,7 @@ export type OutreachUser = {
   display_name: string;
 };
 
-/** Find-or-create an outreach.users row for a validated Embark email. */
+/** Find-or-create an outreach.users row for a verified allowlisted Helios email. */
 export async function upsertUserByEmail(email: string): Promise<OutreachUser> {
   const normalized = email.trim().toLowerCase();
   const displayName = displayNameFromEmail(normalized);

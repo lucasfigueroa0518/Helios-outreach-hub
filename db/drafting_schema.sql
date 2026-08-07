@@ -921,6 +921,71 @@ BEGIN
 END;
 $$;
 
+-- ── Outbound email send queue (daily cap / backlog) ─────────────────────────
+
+CREATE TABLE IF NOT EXISTS outreach.email_send_queue (
+    id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id              uuid NOT NULL REFERENCES outreach.users (id),
+    drafting_item_id      uuid NOT NULL REFERENCES outreach.drafting_items (id) ON DELETE CASCADE,
+    campaign_id           uuid NOT NULL REFERENCES outreach.campaigns (id) ON DELETE CASCADE,
+    scheduled_for         timestamptz NOT NULL,
+    schedule_date         date NOT NULL,
+    status                text NOT NULL DEFAULT 'queued',
+    to_email              text NOT NULL,
+    subject               text NOT NULL,
+    recipient_name        text,
+    orchestration_job_id  uuid,
+    error_message         text,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_at            timestamptz NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'email_send_queue_status_check'
+        AND conrelid = 'outreach.email_send_queue'::regclass
+    ) THEN
+      ALTER TABLE outreach.email_send_queue
+        ADD CONSTRAINT email_send_queue_status_check
+        CHECK (status IN ('queued', 'sending', 'sent', 'cancelled', 'failed')) NOT VALID;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_email_send_queue_owner_date
+    ON outreach.email_send_queue (owner_id, schedule_date);
+CREATE INDEX IF NOT EXISTS idx_email_send_queue_owner_scheduled
+    ON outreach.email_send_queue (owner_id, scheduled_for)
+    WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS idx_email_send_queue_owner_campaign_date
+    ON outreach.email_send_queue (owner_id, campaign_id, schedule_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_email_send_queue_item_active
+    ON outreach.email_send_queue (drafting_item_id)
+    WHERE status IN ('queued', 'sending');
+
+-- ── Cloud worker billing guard (fail-closed when GCP spend > $0) ─────────────
+
+CREATE TABLE IF NOT EXISTS outreach.billing_guard (
+    id              text PRIMARY KEY DEFAULT 'cloud_worker',
+    tripped         boolean NOT NULL DEFAULT false,
+    cost_amount     numeric(20, 6),
+    currency_code   text,
+    alert_title     text,
+    detail          text,
+    source          text,
+    console_url     text,
+    raw_payload     jsonb NOT NULL DEFAULT '{}'::jsonb,
+    tripped_at      timestamptz,
+    cleared_at      timestamptz,
+    acknowledged_at timestamptz,
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO outreach.billing_guard (id)
+VALUES ('cloud_worker')
+ON CONFLICT (id) DO NOTHING;
+
 GRANT USAGE ON SCHEMA outreach TO postgres, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA outreach TO postgres, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA outreach TO postgres, service_role;

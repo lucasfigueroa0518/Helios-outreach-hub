@@ -396,6 +396,29 @@ async function handleDraftingJob(
   };
 }
 
+async function handleEmailSend(
+  job: OrchestrationJob<'email.send'>,
+): Promise<WorkHandlerResult> {
+  const { isBillingGuardTripped } = await import('@/lib/billing-guard');
+  if (await isBillingGuardTripped()) {
+    throw new RetryableWorkError(
+      'Billing guard fail-closed: cloud worker spend exceeded $0',
+      5 * 60_000,
+      'billing_guard_tripped',
+    );
+  }
+  const { processQueuedEmailSend } = await import('@/lib/drafting/send-queue');
+  const result = await processQueuedEmailSend(job.payload.queueId);
+  // Permanent send failures stay on the queue row for user Retry; do not
+  // burn orch retries on non-transient draft/config errors.
+  return {
+    result: {
+      status: result.status,
+      error: result.error,
+    },
+  };
+}
+
 async function handleReconcile(
   _job: OrchestrationJob<'system.reconcile'>,
 ): Promise<WorkHandlerResult> {
@@ -544,6 +567,14 @@ async function handleReconcile(
     // Keep reconcile resilient.
   }
 
+  let emailSendQueueRevived = 0;
+  try {
+    const { reconcileEmailSendQueue } = await import('@/lib/drafting/send-queue');
+    emailSendQueueRevived = await reconcileEmailSendQueue(50);
+  } catch {
+    // Keep reconcile resilient.
+  }
+
   // Close idle drafting runs everywhere (also repairs historical eternal
   // `active` runs that predate run finalization).
   let draftingRunsFinalized = 0;
@@ -575,6 +606,7 @@ async function handleReconcile(
       draftingRunsFinalized,
       gatesWarmed,
       emailDeliveryReconciled,
+      emailSendQueueRevived,
       staleWorkersRemoved,
     },
   };
@@ -598,6 +630,7 @@ const HANDLERS: Record<WorkKind, Handler> = {
   'drafting.job.verify_mailbox': handleDraftingJob as Handler,
   'drafting.job.process': handleDraftingJob as Handler,
   'drafting.job.write': handleDraftingJob as Handler,
+  'email.send': handleEmailSend as Handler,
   'system.reconcile': handleReconcile as Handler,
 };
 

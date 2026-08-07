@@ -238,6 +238,36 @@ export async function cancelScope(scopeKey: string): Promise<number> {
   return rowCount ?? 0;
 }
 
+export async function cancelWorkByIds(jobIds: string[]): Promise<number> {
+  if (jobIds.length === 0) return 0;
+  const { rowCount } = await dbQuery(
+    `UPDATE outreach.orchestration_jobs
+        SET status = 'cancelled',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            heartbeat_at = NULL,
+            finished_at = now(),
+            updated_at = now()
+      WHERE id = ANY($1::uuid[]) AND status = 'pending'`,
+    [jobIds],
+  );
+  return rowCount ?? 0;
+}
+
+export async function reschedulePendingWork(
+  jobId: string,
+  availableAt: Date,
+): Promise<boolean> {
+  const { rowCount } = await dbQuery(
+    `UPDATE outreach.orchestration_jobs
+        SET available_at = $2::timestamptz,
+            updated_at = now()
+      WHERE id = $1 AND status = 'pending'`,
+    [jobId, availableAt.toISOString()],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
 export async function registerWorker(
   workerId: string,
   metadata: Record<string, unknown> = {},

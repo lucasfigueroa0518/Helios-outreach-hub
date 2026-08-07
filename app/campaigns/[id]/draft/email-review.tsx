@@ -1,9 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import { startTransition, useCallback, useEffect, useId, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Pencil, RotateCcw, Send } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Pencil, RotateCcw, Send, X } from 'lucide-react';
 
 import type { DraftingItemRow, SenderProfile } from '@/app/campaigns/[id]/draft/types';
+import { formatNyDateLabel } from '@/lib/drafting/send-queue-schedule';
 
 function statusChipLabel(
   state: DraftingItemRow['state'],
@@ -79,6 +81,9 @@ export function EmailReview({
     available: boolean;
     blocking_reasons: string[];
     pending: number;
+    today_remaining?: number;
+    queued_count?: number;
+    next_schedule_date?: string | null;
   };
   onSelectItem: (itemId: string) => void;
   onRefresh: () => void;
@@ -273,7 +278,9 @@ export function EmailReview({
     const matches = (row: DraftingItemRow) =>
       row.id !== excludeId
       && isDraftSendable(row.state)
-      && row.draft?.send_status !== 'sent';
+      && row.draft?.send_status !== 'sent'
+      && row.draft?.send_status !== 'queued'
+      && row.draft?.send_status !== 'sending';
     const after = reviewable.find((row, index) => index > fromIndex && matches(row));
     if (after) return after;
     return reviewable.find((row) => matches(row)) ?? null;
@@ -350,6 +357,7 @@ export function EmailReview({
   function sendCurrentDraft() {
     if (!current?.draft) return;
     if (current.draft.send_status === 'sent') return;
+    if (current.draft.send_status === 'queued' || current.draft.send_status === 'sending') return;
     if (!sends.configured || !isDraftSendable(current.state)) return;
     if (inFlightRef.current.has(current.id) || approveFlash || sendFlash || rewriting) return;
 
@@ -363,7 +371,6 @@ export function EmailReview({
     setSendFlash(true);
     setShowFeedback(false);
     setEditing(false);
-    advanceAfterSend(fromIndex, itemId);
 
     void (async () => {
       try {
@@ -381,6 +388,14 @@ export function EmailReview({
           onRefresh();
           return;
         }
+        if (data.status === 'queued') {
+          sendHoldRef.current = false;
+          setSendFlash(false);
+          setSendState('idle');
+          onRefresh();
+          return;
+        }
+        advanceAfterSend(fromIndex, itemId);
         setSendState('idle');
         onRefresh();
       } catch (error) {
@@ -388,6 +403,77 @@ export function EmailReview({
         setSendFlash(false);
         setSendState('error');
         setSendError(error instanceof Error ? error.message : 'Could not send email');
+        onRefresh();
+      } finally {
+        inFlightRef.current.delete(itemId);
+      }
+    })();
+  }
+
+  function cancelQueuedDraft() {
+    if (!current?.draft?.queue_id) return;
+    if (inFlightRef.current.has(current.id)) return;
+    const queueId = current.draft.queue_id;
+    const itemId = current.id;
+    inFlightRef.current.add(itemId);
+    setSendError(null);
+    void (async () => {
+      try {
+        const response = await fetch('/api/send-queue', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: [queueId] }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setSendError(typeof data.error === 'string' ? data.error : 'Could not cancel queued send');
+        }
+        onRefresh();
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : 'Could not cancel queued send');
+        onRefresh();
+      } finally {
+        inFlightRef.current.delete(itemId);
+      }
+    })();
+  }
+
+  function sendQueuedDraftNow() {
+    if (!current?.draft?.queue_id) return;
+    if ((sends.today_remaining ?? 0) < 1) {
+      setSendError('No send slots remaining today');
+      return;
+    }
+    if (inFlightRef.current.has(current.id)) return;
+    const queueId = current.draft.queue_id;
+    const itemId = current.id;
+    const fromIndex = currentIndex;
+    inFlightRef.current.add(itemId);
+    setSendError(null);
+    sendHoldRef.current = true;
+    setSendFlash(true);
+    void (async () => {
+      try {
+        const response = await fetch('/api/send-queue/send-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: [queueId] }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          sendHoldRef.current = false;
+          setSendFlash(false);
+          setSendError(typeof data.error === 'string' ? data.error : 'Could not send now');
+          onRefresh();
+          return;
+        }
+        advanceAfterSend(fromIndex, itemId);
+        setSendState('idle');
+        onRefresh();
+      } catch (error) {
+        sendHoldRef.current = false;
+        setSendFlash(false);
+        setSendError(error instanceof Error ? error.message : 'Could not send now');
         onRefresh();
       } finally {
         inFlightRef.current.delete(itemId);
@@ -609,9 +695,15 @@ export function EmailReview({
   const rewriting = current.state === 'queued_rewrite' || current.state === 'rewriting';
   const decidable = canDecideOnDraft(current) && !approveFlash && !sendFlash && !rewriting;
   const alreadySent = current.draft.send_status === 'sent';
+  const isQueued = current.draft.send_status === 'queued'
+    || current.draft.send_status === 'sending';
+  const queuedLabel = current.draft.schedule_date
+    ? `Queued · ${formatNyDateLabel(current.draft.schedule_date)}`
+    : 'Queued';
   const canSend = sends.configured
     && isDraftSendable(current.state)
     && !alreadySent
+    && !isQueued
     && !approveFlash
     && !sendFlash
     && !rewriting;
@@ -619,11 +711,13 @@ export function EmailReview({
     ? 'Add RESEND_API_KEY to .env.local to enable sending'
     : alreadySent
       ? 'This draft was already sent'
-      : !isDraftSendable(current.state)
-        ? 'Draft is not ready to send yet'
-        : sendFlash
-          ? 'Sending…'
-          : null;
+      : isQueued
+        ? queuedLabel
+        : !isDraftSendable(current.state)
+          ? 'Draft is not ready to send yet'
+          : sendFlash
+            ? 'Sending…'
+            : null;
   const feedbackCharsLeft = 500 - rewriteFeedback.length;
   const shellClass = [
     'drafting-email-shell',
@@ -685,6 +779,15 @@ export function EmailReview({
             >
               {statusChipLabel(current.state, current.review_status, retrySuggested)}
             </span>
+            {isQueued ? (
+              <Link
+                href="/hub/queue"
+                className="drafting-status-chip drafting-status-chip--queued"
+                title="Open send queue"
+              >
+                {queuedLabel}
+              </Link>
+            ) : null}
             {alreadySent || current.draft.send_status === 'failed' ? (
               <span
                 className={`drafting-status-chip ${
@@ -861,17 +964,41 @@ export function EmailReview({
           >
             <RotateCcw size={16} />
           </button>
-          <button
-            type="button"
-            className="drafting-icon-btn drafting-icon-btn--send"
-            aria-label="Send email"
-            aria-describedby={sendDisabledReason ? sendDisabledReasonId : undefined}
-            title={canSend ? 'Send via Resend' : sendDisabledReason ?? 'Send'}
-            disabled={!canSend}
-            onClick={sendCurrentDraft}
-          >
-            <Send size={16} />
-          </button>
+          {isQueued && current.draft.send_status === 'queued' ? (
+            <>
+              <button
+                type="button"
+                className="drafting-icon-btn drafting-icon-btn--send"
+                aria-label="Send queued email now"
+                title={(sends.today_remaining ?? 0) > 0 ? 'Send now' : 'No slots remaining today'}
+                disabled={(sends.today_remaining ?? 0) < 1 || sendFlash}
+                onClick={sendQueuedDraftNow}
+              >
+                <Send size={16} />
+              </button>
+              <button
+                type="button"
+                className="drafting-icon-btn drafting-icon-btn--deny"
+                aria-label="Cancel queued send"
+                title="Cancel queued send"
+                onClick={cancelQueuedDraft}
+              >
+                <X size={16} />
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="drafting-icon-btn drafting-icon-btn--send"
+              aria-label="Send email"
+              aria-describedby={sendDisabledReason ? sendDisabledReasonId : undefined}
+              title={canSend ? 'Send via Resend' : sendDisabledReason ?? 'Send'}
+              disabled={!canSend}
+              onClick={sendCurrentDraft}
+            >
+              <Send size={16} />
+            </button>
+          )}
         </div>
         {showFeedback ? (
           <div
@@ -936,24 +1063,33 @@ export function EmailReview({
             ? 'Sending via Resend…'
             : sendError
               ? sendError
-              : alreadySent
-                ? [
-                    current.draft.engagement === 'replied' && current.draft.replied_at
-                      ? `Replied ${new Date(current.draft.replied_at).toLocaleString()}`
-                      : current.draft.engagement === 'opened' && current.draft.opened_at
-                        ? `Opened ${new Date(current.draft.opened_at).toLocaleString()}`
-                        : current.draft.engagement === 'delivered' && current.draft.delivered_at
-                          ? `Delivered ${new Date(current.draft.delivered_at).toLocaleString()}`
-                          : current.draft.engagement === 'bounced' && current.draft.bounced_at
-                            ? `Bounced ${new Date(current.draft.bounced_at).toLocaleString()}`
-                            : current.draft.sent_at
-                              ? `Sent ${new Date(current.draft.sent_at).toLocaleString()}`
-                              : 'Sent',
-                    current.draft.open_count > 0
-                      ? `${current.draft.open_count} open${current.draft.open_count === 1 ? '' : 's'}`
-                      : null,
-                  ].filter(Boolean).join(' · ')
-                : sendDisabledReason ?? 'Send any draft via Resend — download is only required for export.'}
+              : isQueued
+                ? (
+                  <>
+                    {queuedLabel}
+                    {' · '}
+                    <Link href="/hub/queue">Open queue</Link>
+                    {(sends.today_remaining ?? 0) > 0 ? ' · Send now available' : ''}
+                  </>
+                )
+                : alreadySent
+                  ? [
+                      current.draft.engagement === 'replied' && current.draft.replied_at
+                        ? `Replied ${new Date(current.draft.replied_at).toLocaleString()}`
+                        : current.draft.engagement === 'opened' && current.draft.opened_at
+                          ? `Opened ${new Date(current.draft.opened_at).toLocaleString()}`
+                          : current.draft.engagement === 'delivered' && current.draft.delivered_at
+                            ? `Delivered ${new Date(current.draft.delivered_at).toLocaleString()}`
+                            : current.draft.engagement === 'bounced' && current.draft.bounced_at
+                              ? `Bounced ${new Date(current.draft.bounced_at).toLocaleString()}`
+                              : current.draft.sent_at
+                                ? `Sent ${new Date(current.draft.sent_at).toLocaleString()}`
+                                : 'Sent',
+                      current.draft.open_count > 0
+                        ? `${current.draft.open_count} open${current.draft.open_count === 1 ? '' : 's'}`
+                        : null,
+                    ].filter(Boolean).join(' · ')
+                  : sendDisabledReason ?? 'Send any draft via Resend — download is only required for export.'}
         </p>
       </div>
     </article>

@@ -29,6 +29,7 @@ export const KIND_CONFIG: Record<WorkKind, KindConfig> = {
   // separate lane so long Sonnet research cannot head-of-line-block the queue.
   'drafting.job.process': { lane: 'drafting', defaultMaxAttempts: 3, priority: 20 },
   'drafting.job.write': { lane: 'drafting_write', defaultMaxAttempts: 3, priority: 40 },
+  'email.send': { lane: 'email_send', defaultMaxAttempts: 3, priority: 25 },
   'system.reconcile': { lane: 'maintenance', defaultMaxAttempts: 3, priority: -10 },
 };
 
@@ -62,6 +63,8 @@ export function laneLimit(lane: WorkLane): number {
       return effectiveDraftingResearchLaneLimit();
     case 'drafting_write':
       return effectiveDraftingWriteLaneLimit();
+    case 'email_send':
+      return positiveInt('ORG_EMAIL_SEND_CONCURRENCY', 2, 10);
     case 'maintenance':
       return 1;
   }

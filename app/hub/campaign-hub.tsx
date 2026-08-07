@@ -2,9 +2,11 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { signOut } from 'next-auth/react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { HubPlaneFlight } from '@/app/components/plane-flight';
+import { BillingGuardAlert } from '@/app/hub/billing-guard-alert';
 import { LeadListTutorial } from '@/app/hub/lead-list-tutorial';
 
 import { requestJson } from '@/lib/client-request';
@@ -156,15 +158,28 @@ export function CampaignHub({ email }: { email: string }) {
 
   return (
     <main className="app-shell">
+      <BillingGuardAlert />
       <section className="card">
         <div className="card__header">
           <div>
             <div className="card__title">Outreach Hub</div>
             <div className="card__subtitle">Campaigns for {email}</div>
           </div>
-          <Link href="/hub/analytics" className="btn btn--secondary">
-            Analytics Hub
-          </Link>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <Link href="/hub/queue" className="btn btn--secondary">
+              Queue
+            </Link>
+            <Link href="/hub/analytics" className="btn btn--secondary">
+              Analytics Hub
+            </Link>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              onClick={() => void signOut({ callbackUrl: '/' })}
+            >
+              Sign out
+            </button>
+          </div>
         </div>
         <div className="card__body">
           {error && <p className="field__error">{error}</p>}

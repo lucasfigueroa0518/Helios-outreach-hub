@@ -26,6 +26,8 @@ export const DRAFTING_REQUIRED_TABLES = [
   'outreach.draft_research_packets',
   'outreach.email_drafts',
   'outreach.email_sends',
+  'outreach.email_send_queue',
+  'outreach.billing_guard',
   'outreach.drafting_job_cost_events',
   'outreach.drafting_run_cost_opening_balances',
 ] as const;
@@ -81,6 +83,26 @@ export const DRAFTING_REQUIRED_COLUMNS: DraftingSchemaColumn[] = [
     table: 'outreach.email_sends',
     column: 'processed_webhook_ids',
     reason: 'Idempotent Resend webhook ingestion',
+  },
+  {
+    table: 'outreach.email_send_queue',
+    column: 'schedule_date',
+    reason: 'Daily send budget buckets (America/New_York)',
+  },
+  {
+    table: 'outreach.email_send_queue',
+    column: 'scheduled_for',
+    reason: 'Orchestration available_at for deferred sends',
+  },
+  {
+    table: 'outreach.email_send_queue',
+    column: 'orchestration_job_id',
+    reason: 'Link queue rows to email.send orch jobs',
+  },
+  {
+    table: 'outreach.billing_guard',
+    column: 'tripped',
+    reason: 'Fail-closed cloud worker when GCP billing exceeds $0',
   },
 ];
 

@@ -34,7 +34,9 @@ export type DraftingItemRow = {
     lint_hard_codes: string[];
     temporal_status: 'verified' | 'context_only' | 'blocked' | 'unknown';
     export_quality_ready: boolean;
-    send_status: 'unsent' | 'sent' | 'failed';
+    send_status: 'unsent' | 'queued' | 'sending' | 'sent' | 'failed';
+    queue_id: string | null;
+    schedule_date: string | null;
     sent_at: string | null;
     send_error: string | null;
     engagement:
@@ -127,6 +129,9 @@ export type DraftingSnapshot = {
     available: boolean;
     blocking_reasons: string[];
     pending: number;
+    today_remaining: number;
+    queued_count: number;
+    next_schedule_date: string | null;
   };
   rescue: {
     needed: boolean;

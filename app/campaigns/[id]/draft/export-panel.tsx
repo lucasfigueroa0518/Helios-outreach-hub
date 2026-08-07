@@ -86,6 +86,12 @@ export function ExportPanel({
                 ? ` · ${deliveredCount} delivered · ${openedCount} opened · ${repliedCount} replied${bouncedCount > 0 ? ` · ${bouncedCount} bounced` : ''}`
                 : ''}
               {' · '}{pendingSendCount} ready to send
+              {typeof sendState.queued_count === 'number' && sendState.queued_count > 0
+                ? ` · ${sendState.queued_count} queued`
+                : ''}
+              {typeof sendState.today_remaining === 'number'
+                ? ` · ${sendState.today_remaining} left today`
+                : ''}
             </span>
           </div>
           <div
@@ -146,9 +152,12 @@ export function ExportPanel({
                     return;
                   }
                   setBulkSendState('idle');
-                  setBulkSendMessage(
-                    `Sent ${data.sent ?? 0}${data.failed ? ` · ${data.failed} failed` : ''}`,
-                  );
+                  const parts = [
+                    data.sent ? `Sent ${data.sent} now` : null,
+                    data.queued ? `Queued ${data.queued}` : null,
+                    data.failed ? `${data.failed} failed` : null,
+                  ].filter(Boolean);
+                  setBulkSendMessage(parts.length > 0 ? parts.join(' · ') : 'Nothing to send');
                   onRefresh();
                 } catch (error) {
                   setBulkSendState('error');

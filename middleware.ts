@@ -1,38 +1,54 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { SESSION_COOKIE, verifySessionToken } from '@/lib/session';
+import { NextResponse } from 'next/server';
+import NextAuth from 'next-auth';
 
-const PUBLIC_API = new Set([
-  '/api/auth/login',
-  '/api/auth/logout',
-  '/api/health',
-]);
+import { authConfig } from '@/auth.config';
 
-export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+const { auth } = NextAuth(authConfig);
 
-  if (!pathname.startsWith('/api/')) {
-    return NextResponse.next();
-  }
-  if (PUBLIC_API.has(pathname)) {
-    return NextResponse.next();
-  }
-
-  const token = req.cookies.get(SESSION_COOKIE)?.value;
-  if (!token) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const session = await verifySessionToken(token);
-  if (!session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const headers = new Headers(req.headers);
-  headers.set('x-user-id', session.userId);
-  headers.set('x-user-email', session.email);
-  return NextResponse.next({ request: { headers } });
+function isPublicPath(pathname: string): boolean {
+  if (pathname === '/') return true;
+  if (pathname.startsWith('/api/auth')) return true;
+  if (pathname === '/api/health') return true;
+  if (pathname === '/api/webhooks/resend') return true;
+  if (pathname === '/api/webhooks/gcp-billing') return true;
+  return false;
 }
 
+function isProtectedPage(pathname: string): boolean {
+  return pathname === '/hub'
+    || pathname.startsWith('/hub/')
+    || pathname.startsWith('/campaigns/');
+}
+
+export default auth((req) => {
+  const { pathname } = req.nextUrl;
+  if (isPublicPath(pathname)) {
+    return NextResponse.next();
+  }
+
+  // Edge config has no session callback — email presence means a valid Auth.js JWT.
+  const signedIn = Boolean(req.auth?.user?.email);
+
+  if (pathname.startsWith('/api/')) {
+    if (!signedIn) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    return NextResponse.next();
+  }
+
+  if (isProtectedPage(pathname) && !signedIn) {
+    const login = new URL('/', req.nextUrl.origin);
+    return NextResponse.redirect(login);
+  }
+
+  return NextResponse.next();
+});
+
 export const config = {
-  matcher: ['/api/:path*'],
+  matcher: [
+    '/',
+    '/hub/:path*',
+    '/campaigns/:path*',
+    '/api/:path*',
+  ],
 };
