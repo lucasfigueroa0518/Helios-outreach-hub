@@ -119,6 +119,8 @@ export type SenderProfileRow = {
   display_name: string;
   work_email: string;
   title: string;
+  company_name: string;
+  headshot_storage_path: string | null;
   signature_mode: SenderSignatureMode;
   timezone: string | null;
   voice_notes: string | null;
@@ -128,6 +130,10 @@ export type SenderProfileRow = {
   created_at: string;
   updated_at: string;
 };
+
+const SENDER_PROFILE_SELECT = `id, display_name, work_email, title, company_name, headshot_storage_path,
+            signature_mode, timezone, voice_notes,
+            professional_context, revision, is_default, created_at, updated_at`;
 
 export type DraftingWorkspaceRow = {
   id: string;
@@ -652,6 +658,8 @@ function buildInputSnapshotFromLead(input: {
       displayName: input.sender.display_name,
       workEmail: input.sender.work_email,
       title: input.sender.title,
+      companyName: input.sender.company_name,
+      headshotStoragePath: input.sender.headshot_storage_path,
       signatureMode: input.sender.signature_mode,
       voiceNotes: input.sender.voice_notes,
       professionalContext: input.sender.professional_context ?? {},
@@ -765,8 +773,7 @@ async function assertDraftTimelyNow(
 
 export async function listSenderProfiles(userId: string): Promise<SenderProfileRow[]> {
   const { rows } = await dbQuery<SenderProfileRow>(
-    `SELECT id, display_name, work_email, title, signature_mode, timezone, voice_notes,
-            professional_context, revision, is_default, created_at, updated_at
+    `SELECT ${SENDER_PROFILE_SELECT}
      FROM outreach.sender_profiles
      WHERE user_id = $1
      ORDER BY is_default DESC, updated_at DESC`,
@@ -782,6 +789,8 @@ export async function upsertSenderProfile(
     display_name: string;
     work_email: string;
     title: string;
+    company_name?: string | null;
+    headshot_storage_path?: string | null;
     signature_mode?: SenderSignatureMode;
     timezone?: string | null;
     voice_notes?: string | null;
@@ -795,7 +804,8 @@ export async function upsertSenderProfile(
   if (!displayName || !workEmail || !title) {
     throw new DraftingValidationError('Sender profile requires display name, work email, and title');
   }
-  const signatureMode = input.signature_mode ?? 'name';
+  const companyName = normalizeRequiredField(input.company_name ?? 'Helios Group') || 'Helios Group';
+  const signatureMode = input.signature_mode ?? 'name_and_role';
   if (!['name', 'name_and_role'].includes(signatureMode)) {
     throw new DraftingValidationError('Invalid signature mode');
   }
@@ -814,22 +824,25 @@ export async function upsertSenderProfile(
          SET display_name = $3,
              work_email = $4,
              title = $5,
-             signature_mode = $6,
-             timezone = $7,
-             voice_notes = $8,
-             professional_context = coalesce($9::jsonb, professional_context),
-             is_default = coalesce($10, is_default),
+             company_name = $6,
+             headshot_storage_path = COALESCE($7, headshot_storage_path),
+             signature_mode = $8,
+             timezone = $9,
+             voice_notes = $10,
+             professional_context = coalesce($11::jsonb, professional_context),
+             is_default = coalesce($12, is_default),
              revision = revision + 1,
              updated_at = now()
          WHERE id = $1 AND user_id = $2
-         RETURNING id, display_name, work_email, title, signature_mode, timezone, voice_notes,
-                   professional_context, revision, is_default, created_at, updated_at`,
+         RETURNING ${SENDER_PROFILE_SELECT}`,
         [
           input.id,
           userId,
           displayName,
           workEmail,
           title,
+          companyName,
+          input.headshot_storage_path === undefined ? null : input.headshot_storage_path,
           signatureMode,
           input.timezone ?? null,
           input.voice_notes ?? null,
@@ -843,16 +856,17 @@ export async function upsertSenderProfile(
 
     const created = await client.query<SenderProfileRow>(
       `INSERT INTO outreach.sender_profiles (
-         user_id, display_name, work_email, title, signature_mode, timezone,
-         voice_notes, professional_context, is_default
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), coalesce($9, false))
-       RETURNING id, display_name, work_email, title, signature_mode, timezone, voice_notes,
-                 professional_context, revision, is_default, created_at, updated_at`,
+         user_id, display_name, work_email, title, company_name, headshot_storage_path,
+         signature_mode, timezone, voice_notes, professional_context, is_default
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, coalesce($10::jsonb, '{}'::jsonb), coalesce($11, false))
+       RETURNING ${SENDER_PROFILE_SELECT}`,
       [
         userId,
         displayName,
         workEmail,
         title,
+        companyName,
+        input.headshot_storage_path ?? null,
         signatureMode,
         input.timezone ?? null,
         input.voice_notes ?? null,
@@ -864,14 +878,43 @@ export async function upsertSenderProfile(
   });
 }
 
+export async function setSenderProfileHeadshot(
+  userId: string,
+  profileId: string,
+  storagePath: string,
+): Promise<SenderProfileRow> {
+  const { rows } = await dbQuery<SenderProfileRow>(
+    `UPDATE outreach.sender_profiles
+        SET headshot_storage_path = $3,
+            revision = revision + 1,
+            updated_at = now()
+      WHERE id = $1 AND user_id = $2
+      RETURNING ${SENDER_PROFILE_SELECT}`,
+    [profileId, userId, storagePath],
+  );
+  if (!rows[0]) throw new DraftingNotFoundError('Sender profile not found');
+  return rows[0];
+}
+
+export async function getSenderProfileHeadshotPath(
+  profileId: string,
+): Promise<string | null> {
+  const { rows } = await dbQuery<{ headshot_storage_path: string | null; work_email: string }>(
+    `SELECT headshot_storage_path, work_email
+       FROM outreach.sender_profiles
+      WHERE id = $1`,
+    [profileId],
+  );
+  return rows[0]?.headshot_storage_path ?? null;
+}
+
 async function resolveSenderProfile(
   userId: string,
   senderProfileId?: string,
 ): Promise<SenderProfileRow> {
   if (senderProfileId) {
     const { rows } = await dbQuery<SenderProfileRow>(
-      `SELECT id, display_name, work_email, title, signature_mode, timezone, voice_notes,
-              professional_context, revision, is_default, created_at, updated_at
+      `SELECT ${SENDER_PROFILE_SELECT}
        FROM outreach.sender_profiles
        WHERE id = $1 AND user_id = $2`,
       [senderProfileId, userId],
@@ -881,8 +924,7 @@ async function resolveSenderProfile(
   }
 
   const { rows } = await dbQuery<SenderProfileRow>(
-    `SELECT id, display_name, work_email, title, signature_mode, timezone, voice_notes,
-            professional_context, revision, is_default, created_at, updated_at
+    `SELECT ${SENDER_PROFILE_SELECT}
      FROM outreach.sender_profiles
      WHERE user_id = $1
      ORDER BY is_default DESC, updated_at DESC
@@ -2540,6 +2582,10 @@ async function dispatchDraftSend(
       toEmail: row.toEmail,
       subject: row.subject,
       bodyText: row.bodyText,
+      title: row.senderTitle,
+      companyName: row.senderCompanyName,
+      senderProfileId: row.senderProfileId,
+      headshotStoragePath: row.headshotStoragePath,
     });
     if (result.status === 'sent') {
       return {

@@ -156,6 +156,8 @@ export type SenderProfile = {
   display_name: string;
   work_email: string;
   title: string;
+  company_name: string;
+  headshot_storage_path: string | null;
   signature_mode: 'name' | 'name_and_role';
   voice_notes: string | null;
   is_default: boolean;

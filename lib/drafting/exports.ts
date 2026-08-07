@@ -55,6 +55,10 @@ export type ApprovedDraftExportRow = {
   bodyText: string;
   fromName: string;
   fromEmail: string;
+  senderTitle: string;
+  senderCompanyName: string;
+  senderProfileId: string | null;
+  headshotStoragePath: string | null;
   state: string;
   reviewStatus: string;
   inputFingerprint: string;
@@ -468,6 +472,10 @@ export function mapApprovedExportRow(input: {
     bodyText: input.bodyText,
     fromName: input.snapshot.sender.displayName,
     fromEmail: input.snapshot.sender.workEmail,
+    senderTitle: input.snapshot.sender.title ?? '',
+    senderCompanyName: input.snapshot.sender.companyName ?? 'Helios Group',
+    senderProfileId: input.snapshot.sender.profileId ?? null,
+    headshotStoragePath: input.snapshot.sender.headshotStoragePath ?? null,
     state: input.state,
     reviewStatus: input.reviewStatus,
     inputFingerprint: input.inputFingerprint,

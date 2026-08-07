@@ -50,3 +50,7 @@ eng.traineddata
 __MACOSX/
 skills-lock.json
 
+
+# Large source headshots (use public/signatures/* instead)
+Lucas Head Shot.JPG
+Lucas Head Shot.jpg

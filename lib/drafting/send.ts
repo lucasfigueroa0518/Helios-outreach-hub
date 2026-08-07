@@ -1,5 +1,11 @@
 import { Resend } from 'resend';
 
+import {
+  appendPlainTextSignature,
+  buildOutreachEmailHtml,
+  resolveEmailSignature,
+  type EmailSignatureFields,
+} from '@/lib/drafting/email-signature';
 import { normalizeDraftText } from '@/lib/drafting/normalize';
 
 export type SendEmailInput = {
@@ -10,6 +16,11 @@ export type SendEmailInput = {
   bodyText: string;
   itemId?: string;
   campaignId?: string;
+  /** Optional overrides; otherwise resolved from fromEmail (Lucas hardcoded). */
+  title?: string | null;
+  companyName?: string | null;
+  senderProfileId?: string | null;
+  headshotStoragePath?: string | null;
 };
 
 export type SendEmailResult = {
@@ -78,7 +89,18 @@ export function createResendClient(): Resend {
   return new Resend(apiKey);
 }
 
-/** Send one plain-text outreach email through Resend. */
+function resolveSendSignature(input: SendEmailInput): EmailSignatureFields {
+  return resolveEmailSignature({
+    workEmail: input.fromEmail,
+    displayName: input.fromName,
+    title: input.title,
+    companyName: input.companyName,
+    profileId: input.senderProfileId,
+    headshotStoragePath: input.headshotStoragePath,
+  });
+}
+
+/** Send one outreach email through Resend (HTML signature + plain-text fallback). */
 export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmailResult> {
   const toEmail = input.toEmail.trim().toLowerCase();
   if (!toEmail || !toEmail.includes('@')) {
@@ -90,6 +112,10 @@ export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmai
   if (!subject || !bodyText) {
     throw new EmailSendProviderError('Subject and body are required to send');
   }
+
+  const signature = resolveSendSignature(input);
+  const text = appendPlainTextSignature(bodyText, signature);
+  const html = buildOutreachEmailHtml(bodyText, signature);
 
   const tags: Array<{ name: string; value: string }> = [];
   if (input.itemId?.trim()) tags.push({ name: 'item_id', value: input.itemId.trim() });
@@ -104,7 +130,8 @@ export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmai
     from: resolvedFromAddress(input),
     to: [toEmail],
     subject,
-    text: bodyText,
+    text,
+    html,
     replyTo: replyTo || undefined,
     tags: tags.length > 0 ? tags : undefined,
   });

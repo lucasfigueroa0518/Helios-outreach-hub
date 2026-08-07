@@ -251,6 +251,8 @@ export type InputSnapshotSender = {
   displayName: string;
   workEmail: string;
   title: string;
+  companyName?: string | null;
+  headshotStoragePath?: string | null;
   signatureMode: SenderSignatureMode;
   voiceNotes: string | null;
   professionalContext: Record<string, unknown>;

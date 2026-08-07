@@ -30,6 +30,10 @@ export async function POST(request: NextRequest) {
     work_email?: string;
     workEmail?: string;
     title?: string;
+    company_name?: string;
+    companyName?: string;
+    headshot_storage_path?: string | null;
+    headshotStoragePath?: string | null;
     signature_mode?: SenderSignatureMode;
     signatureMode?: SenderSignatureMode;
     timezone?: string | null;
@@ -65,6 +69,8 @@ export async function POST(request: NextRequest) {
       display_name: displayName,
       work_email: workEmail,
       title,
+      company_name: body.companyName ?? body.company_name,
+      headshot_storage_path: body.headshotStoragePath ?? body.headshot_storage_path,
       signature_mode: body.signatureMode ?? body.signature_mode,
       timezone: body.timezone,
       voice_notes: body.voiceNotes ?? body.voice_notes,

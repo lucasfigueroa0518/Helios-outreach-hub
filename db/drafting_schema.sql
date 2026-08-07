@@ -26,7 +26,16 @@ CREATE TABLE IF NOT EXISTS outreach.sender_profiles (
 ALTER TABLE outreach.sender_profiles
     ADD COLUMN IF NOT EXISTS professional_context jsonb NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1,
-    ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT false;
+    ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS company_name text NOT NULL DEFAULT 'Helios Group',
+    ADD COLUMN IF NOT EXISTS headshot_storage_path text;
+
+-- Prefer the full company name for signatures (idempotent for older defaults).
+ALTER TABLE outreach.sender_profiles
+    ALTER COLUMN company_name SET DEFAULT 'Helios Group';
+UPDATE outreach.sender_profiles
+   SET company_name = 'Helios Group'
+ WHERE trim(company_name) = '' OR company_name = 'Helios';
 
 DO $$
 BEGIN

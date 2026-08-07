@@ -400,6 +400,10 @@ export async function executeImmediateResend(input: {
   toEmail: string;
   subject: string;
   bodyText: string;
+  title?: string | null;
+  companyName?: string | null;
+  senderProfileId?: string | null;
+  headshotStoragePath?: string | null;
 }): Promise<{ status: 'sent' | 'failed'; providerMessageId?: string; error?: string }> {
   try {
     const result = await sendOutreachEmail({
@@ -410,6 +414,10 @@ export async function executeImmediateResend(input: {
       bodyText: input.bodyText,
       itemId: input.itemId,
       campaignId: input.campaignId,
+      title: input.title,
+      companyName: input.companyName,
+      senderProfileId: input.senderProfileId,
+      headshotStoragePath: input.headshotStoragePath,
     });
 
     let providerRfcMessageId: string | null = null;
@@ -710,6 +718,10 @@ type SendableDraftPayload = {
   subject: string;
   bodyText: string;
   recipientName: string;
+  title: string | null;
+  companyName: string | null;
+  senderProfileId: string | null;
+  headshotStoragePath: string | null;
 };
 
 async function loadLatestSendablePayload(itemId: string): Promise<SendableDraftPayload | null> {
@@ -722,6 +734,10 @@ async function loadLatestSendablePayload(itemId: string): Promise<SendableDraftP
     from_name: string;
     from_email: string;
     recipient_name: string | null;
+    title: string | null;
+    company_name: string | null;
+    sender_profile_id: string | null;
+    headshot_storage_path: string | null;
     state: string;
   }>(
     `SELECT i.id AS item_id,
@@ -732,6 +748,10 @@ async function loadLatestSendablePayload(itemId: string): Promise<SendableDraftP
             coalesce(nullif(trim(i.input_snapshot #>> '{sender,displayName}'), ''), '') AS from_name,
             coalesce(nullif(trim(i.input_snapshot #>> '{sender,workEmail}'), ''), '') AS from_email,
             nullif(trim(i.input_snapshot #>> '{lead,fullName}'), '') AS recipient_name,
+            nullif(trim(i.input_snapshot #>> '{sender,title}'), '') AS title,
+            nullif(trim(i.input_snapshot #>> '{sender,companyName}'), '') AS company_name,
+            nullif(trim(i.input_snapshot #>> '{sender,profileId}'), '') AS sender_profile_id,
+            nullif(trim(i.input_snapshot #>> '{sender,headshotStoragePath}'), '') AS headshot_storage_path,
             i.state
        FROM outreach.drafting_items i
        JOIN outreach.drafting_workspaces w ON w.id = i.workspace_id
@@ -758,6 +778,10 @@ async function loadLatestSendablePayload(itemId: string): Promise<SendableDraftP
     subject: row.subject,
     bodyText: row.body_text,
     recipientName: row.recipient_name || row.to_email,
+    title: row.title,
+    companyName: row.company_name,
+    senderProfileId: row.sender_profile_id,
+    headshotStoragePath: row.headshot_storage_path,
   };
 }
 

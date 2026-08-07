@@ -104,6 +104,16 @@ export const DRAFTING_REQUIRED_COLUMNS: DraftingSchemaColumn[] = [
     column: 'tripped',
     reason: 'Fail-closed cloud worker when GCP billing exceeds $0',
   },
+  {
+    table: 'outreach.sender_profiles',
+    column: 'company_name',
+    reason: 'HTML email signature company line',
+  },
+  {
+    table: 'outreach.sender_profiles',
+    column: 'headshot_storage_path',
+    reason: 'HTML email signature headshot (png/jpeg in Storage)',
+  },
 ];
 
 export const DRAFTING_REQUIRED_FUNCTIONS: DraftingSchemaFunction[] = [

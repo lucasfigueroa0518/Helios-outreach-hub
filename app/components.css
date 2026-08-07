@@ -188,7 +188,7 @@ a.segmented__item { text-decoration: none; }
 .field--toggle {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: var(--space-3);
 }
 .field--toggle .field__label { margin: 0; }
@@ -387,7 +387,11 @@ a.segmented__item { text-decoration: none; }
   font: inherit;
   font-weight: var(--font-weight-semibold);
   cursor: pointer;
+  text-decoration: none;
   transition: background var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+.btn:hover {
+  text-decoration: none;
 }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn--primary { background: var(--color-primary); color: var(--color-text-inverse); }
@@ -2838,6 +2842,43 @@ a.segmented__item { text-decoration: none; }
 .drafting-export__timestamp { margin: 0; font-size: var(--font-size-xs); }
 .drafting-sender-modal__voice { min-height: 72px; resize: vertical; }
 .drafting-signature-toggle { margin-top: var(--space-2); }
+.sender-signature-preview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.sender-signature-preview img,
+.sender-signature-preview__placeholder {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+.sender-signature-preview__placeholder {
+  background: var(--color-border);
+}
+.sender-signature-preview__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--font-size-sm);
+  line-height: 1.35;
+  color: var(--color-text);
+}
+.sender-signature-preview__text strong {
+  font-weight: var(--font-weight-semibold);
+}
+.field__hint {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
 .go-to-drafting { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2); }
 @media (max-width: 720px) {
   .drafting-leads__table thead { display: none; }

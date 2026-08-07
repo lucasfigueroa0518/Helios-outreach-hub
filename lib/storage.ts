@@ -101,3 +101,45 @@ export async function createSignedUpload(path: string) {
 export async function removeStoredObject(path: string) {
   await storageRequest('DELETE', `/object/${UPLOAD_BUCKET}/${encodePath(path)}`);
 }
+
+/** Upload bytes with the service role (used for sender headshots). */
+export async function uploadStoredObject(
+  path: string,
+  body: Buffer,
+  contentType: string,
+): Promise<void> {
+  const { baseUrl, serviceRole } = getSettings();
+  const url = new URL(`/storage/v1/object/${UPLOAD_BUCKET}/${encodePath(path)}`, baseUrl);
+  await new Promise<void>((resolve, reject) => {
+    const request = https.request(
+      url,
+      {
+        method: 'POST',
+        rejectUnauthorized: false,
+        headers: {
+          apikey: serviceRole,
+          authorization: `Bearer ${serviceRole}`,
+          'content-type': contentType,
+          'content-length': body.byteLength,
+          'x-upsert': 'true',
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          const status = response.statusCode ?? 500;
+          if (status < 200 || status >= 300) {
+            const text = Buffer.concat(chunks).toString('utf8');
+            reject(new Error(`Storage upload failed (${status}): ${text.slice(0, 200)}`));
+            return;
+          }
+          resolve();
+        });
+      },
+    );
+    request.on('error', reject);
+    request.write(body);
+    request.end();
+  });
+}

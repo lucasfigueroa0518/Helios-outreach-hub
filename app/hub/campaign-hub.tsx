@@ -166,12 +166,6 @@ export function CampaignHub({ email }: { email: string }) {
             <div className="card__subtitle">Campaigns for {email}</div>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <Link href="/hub/queue" className="btn btn--secondary">
-              Queue
-            </Link>
-            <Link href="/hub/analytics" className="btn btn--secondary">
-              Analytics Hub
-            </Link>
             <button
               type="button"
               className="btn btn--secondary"
@@ -203,13 +197,29 @@ export function CampaignHub({ email }: { email: string }) {
             <div className="empty-state">
               <strong>Create your first campaign</strong>
               <span>Keep each outreach list organized in its own workspace, then add your lead sources.</span>
-              <button className="btn btn--primary" onClick={openCreate}>+ New Campaign</button>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button className="btn btn--primary" onClick={openCreate}>+ New Campaign</button>
+                <Link href="/hub/queue" className="btn btn--secondary">
+                  Queue
+                </Link>
+                <Link href="/hub/analytics" className="btn btn--secondary">
+                  Analytics Hub
+                </Link>
+              </div>
             </div>
           ) : (
             <div className="hub-campaigns">
-              <button className="btn btn--primary hub-campaigns__create" type="button" onClick={openCreate}>
-                + New Campaign
-              </button>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button className="btn btn--primary hub-campaigns__create" type="button" onClick={openCreate}>
+                  + New Campaign
+                </button>
+                <Link href="/hub/queue" className="btn btn--secondary">
+                  Queue
+                </Link>
+                <Link href="/hub/analytics" className="btn btn--secondary">
+                  Analytics Hub
+                </Link>
+              </div>
               <div className="hub-campaigns__header">
                 <strong>Your campaigns</strong>
                 <span>{active.length} active</span>
@@ -318,34 +328,42 @@ function CampaignNameForm({
     <form className="login-form" onSubmit={(event) => void onSubmit(event)}>
       <label className="field">
         <span className="field__label">Campaign name</span>
-        <input className="field__input" value={name} onChange={(event) => setName(event.target.value)} autoFocus required />
+        <input
+          className="field__input"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="e.g. Q3 Fintech VP Outreach"
+          autoFocus
+          required
+        />
       </label>
       {showEnrichmentToggle && (
-        <>
-          <div className="field field--toggle">
-            <span className="field__label" id="needs-enrichment-label">Needs Enrichment?</span>
+        <div className="field" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 'var(--space-2)' }}>
+          <span className="field__label" id="needs-enrichment-label">Needs Enrichment?</span>
+          <div className="segmented" style={{ width: 'fit-content' }}>
             <button
               type="button"
-              className={`toggle${needsEnrichment ? ' toggle--on' : ''}`}
-              role="switch"
-              aria-checked={needsEnrichment}
-              aria-labelledby="needs-enrichment-label"
-              onClick={() => setNeedsEnrichment(!needsEnrichment)}
+              className={`segmented__item${!needsEnrichment ? ' segmented__item--active' : ''}`}
+              onClick={() => setNeedsEnrichment(false)}
             >
-              <span className="toggle__track" aria-hidden="true">
-                <span className="toggle__thumb" />
-              </span>
-              <span className="toggle__label">{needsEnrichment ? 'Yes' : 'No'}</span>
+              No
+            </button>
+            <button
+              type="button"
+              className={`segmented__item${needsEnrichment ? ' segmented__item--active' : ''}`}
+              onClick={() => setNeedsEnrichment(true)}
+            >
+              Yes
             </button>
           </div>
-          <p className="field__hint">
+          <p className="field__hint" style={{ margin: 0, marginTop: 'var(--space-1)' }}>
             {needsEnrichment
               ? 'Upload → Enrich → Review → Draft. Use for lists that still need email and profile research.'
               : 'Upload → Draft. Use for lists that are already enriched with validated emails.'}
           </p>
-        </>
+        </div>
       )}
-      <button className="btn btn--primary" type="submit" disabled={saving}>
+      <button className="btn btn--primary" type="submit" disabled={saving || !name.trim()}>
         {saving ? 'Saving…' : submitLabel}
       </button>
     </form>

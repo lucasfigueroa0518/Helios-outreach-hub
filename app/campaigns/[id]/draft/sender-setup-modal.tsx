@@ -1,9 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 
 import type { SenderProfile } from '@/app/campaigns/[id]/draft/types';
+
+const LUCAS_EMAIL = 'lucas@heliosgroup.ai';
 
 export function SenderSetupModal({
   defaultDisplayName,
@@ -18,15 +20,64 @@ export function SenderSetupModal({
   onClose: () => void;
   onSaved: (profile: SenderProfile) => void;
 }) {
-  const [displayName, setDisplayName] = useState(defaultDisplayName);
-  const [workEmail, setWorkEmail] = useState(defaultWorkEmail);
-  const [title, setTitle] = useState('');
-  const [signatureMode, setSignatureMode] = useState<'name' | 'name_and_role'>('name_and_role');
+  const lucasDefaults = defaultWorkEmail.trim().toLowerCase() === LUCAS_EMAIL;
+
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState(
+    lucasDefaults ? 'Lucas Figueroa' : defaultDisplayName,
+  );
+  const [workEmail, setWorkEmail] = useState(
+    lucasDefaults ? LUCAS_EMAIL : defaultWorkEmail,
+  );
+  const [title, setTitle] = useState(lucasDefaults ? 'President' : '');
+  const [companyName, setCompanyName] = useState('Helios Group');
   const [voiceNotes, setVoiceNotes] = useState('');
+  const [headshotPath, setHeadshotPath] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(
+    lucasDefaults ? '/signatures/lucas-figueroa.jpg' : null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const lucasLocked = useMemo(
+    () => workEmail.trim().toLowerCase() === LUCAS_EMAIL,
+    [workEmail],
+  );
 
   if (!open) return null;
+
+  async function uploadHeadshot(file: File) {
+    setUploading(true);
+    setError(null);
+    try {
+      const body = new FormData();
+      body.set('file', file);
+      if (profileId) body.set('profile_id', profileId);
+      body.set('display_name', displayName.trim());
+      body.set('work_email', workEmail.trim());
+      body.set('title', title.trim() || 'Team member');
+      body.set('company_name', companyName.trim() || 'Helios Group');
+
+      const response = await fetch('/api/sender-profiles/headshot', {
+        method: 'POST',
+        body,
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data.error ?? 'Could not upload headshot');
+        return;
+      }
+      const profile = data.profile as SenderProfile;
+      setProfileId(profile.id);
+      setHeadshotPath(profile.headshot_storage_path);
+      setPreviewUrl(`/api/public/sender-headshots/${profile.id}?t=${Date.now()}`);
+    } catch {
+      setError('Could not upload headshot');
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -36,10 +87,13 @@ export function SenderSetupModal({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        id: profileId ?? undefined,
         display_name: displayName.trim(),
         work_email: workEmail.trim(),
         title: title.trim(),
-        signature_mode: signatureMode,
+        company_name: companyName.trim() || 'Helios Group',
+        headshot_storage_path: headshotPath,
+        signature_mode: 'name_and_role',
         voice_notes: voiceNotes.trim() || null,
         is_default: true,
       }),
@@ -66,7 +120,7 @@ export function SenderSetupModal({
           <div>
             <div className="card__title" id="sender-setup-title">Sender setup</div>
             <div className="card__subtitle">
-              These are sender facts the system is not allowed to guess. Confirm before drafting begins.
+              Name, role, company, and headshot power the email signature. Confirm before drafting begins.
             </div>
           </div>
           <button type="button" className="dialog__close" onClick={onClose} aria-label="Close dialog">
@@ -86,7 +140,7 @@ export function SenderSetupModal({
               />
             </label>
             <label className="field">
-              <span className="field__label">Embark work email</span>
+              <span className="field__label">Work email</span>
               <input
                 className="field__input"
                 type="email"
@@ -97,7 +151,7 @@ export function SenderSetupModal({
               />
             </label>
             <label className="field">
-              <span className="field__label">Current title / role</span>
+              <span className="field__label">Position / title</span>
               <input
                 className="field__input"
                 value={title}
@@ -105,25 +159,50 @@ export function SenderSetupModal({
                 required
               />
             </label>
-            <fieldset className="field">
-              <legend className="field__label">Email signature</legend>
-              <div className="segmented drafting-signature-toggle">
-                <button
-                  type="button"
-                  className={`segmented__item${signatureMode === 'name' ? ' segmented__item--active' : ''}`}
-                  onClick={() => setSignatureMode('name')}
-                >
-                  Name only
-                </button>
-                <button
-                  type="button"
-                  className={`segmented__item${signatureMode === 'name_and_role' ? ' segmented__item--active' : ''}`}
-                  onClick={() => setSignatureMode('name_and_role')}
-                >
-                  Name + role
-                </button>
+            <label className="field">
+              <span className="field__label">Company name</span>
+              <input
+                className="field__input"
+                value={companyName}
+                onChange={(event) => setCompanyName(event.target.value)}
+                required
+              />
+            </label>
+
+            <div className="field">
+              <span className="field__label">Signature headshot (PNG or JPEG)</span>
+              {lucasLocked ? (
+                <p className="field__hint">
+                  Your headshot is already configured for lucas@heliosgroup.ai.
+                </p>
+              ) : (
+                <input
+                  className="field__input"
+                  type="file"
+                  accept="image/png,image/jpeg"
+                  disabled={uploading || saving}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void uploadHeadshot(file);
+                  }}
+                />
+              )}
+              <div className="sender-signature-preview" aria-label="Signature preview">
+                {previewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={previewUrl} alt="" width={72} height={72} />
+                ) : (
+                  <div className="sender-signature-preview__placeholder" />
+                )}
+                <div className="sender-signature-preview__text">
+                  <strong>{displayName.trim() || 'Full Name'}</strong>
+                  <span>{title.trim() || 'Position'}</span>
+                  <span>{companyName.trim() || 'Company Name'}</span>
+                </div>
               </div>
-            </fieldset>
+              {uploading ? <p className="field__hint">Uploading headshot…</p> : null}
+            </div>
+
             <label className="field">
               <span className="field__label">Voice / professional context (optional)</span>
               <textarea
@@ -135,7 +214,7 @@ export function SenderSetupModal({
               />
             </label>
             {error ? <p className="field__error" role="alert">{error}</p> : null}
-            <button className="btn btn--primary" type="submit" disabled={saving}>
+            <button className="btn btn--primary" type="submit" disabled={saving || uploading}>
               {saving ? 'Saving…' : 'Save and continue'}
             </button>
           </form>
