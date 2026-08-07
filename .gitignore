@@ -54,3 +54,8 @@ skills-lock.json
 # Large source headshots (use public/signatures/* instead)
 Lucas Head Shot.JPG
 Lucas Head Shot.jpg
+
+# Keep always-on agent rules in git (rest of .cursor stays local)
+!.cursor/
+!.cursor/rules/
+!.cursor/rules/**

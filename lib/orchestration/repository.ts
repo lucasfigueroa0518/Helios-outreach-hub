@@ -254,6 +254,33 @@ export async function cancelWorkByIds(jobIds: string[]): Promise<number> {
   return rowCount ?? 0;
 }
 
+/**
+ * Fixed worker IDs (e.g. gcp-e2-micro-1) keep leases across process restarts.
+ * On boot we cannot still be executing those jobs — release them immediately
+ * so drafting/research does not stall until lease expiry (~10 minutes).
+ */
+export async function releaseOwnedInFlightOnStartup(workerId: string): Promise<number> {
+  const { rowCount } = await dbQuery(
+    `UPDATE outreach.orchestration_jobs
+        SET status = 'pending',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            heartbeat_at = NULL,
+            started_at = NULL,
+            available_at = now(),
+            last_error_code = coalesce(last_error_code, 'worker_restart_reclaim'),
+            last_error_message = coalesce(
+              last_error_message,
+              'Reclaimed in-flight lease after worker process restart'
+            ),
+            updated_at = now()
+      WHERE status = 'in_flight'
+        AND lease_owner = $1`,
+    [workerId],
+  );
+  return rowCount ?? 0;
+}
+
 export async function reschedulePendingWork(
   jobId: string,
   availableAt: Date,

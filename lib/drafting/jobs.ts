@@ -493,7 +493,17 @@ async function handleResearch(jobId: string): Promise<ProcessDraftingJobResult> 
     surface,
   );
   if (!execution.allowed) {
+    // Stamp quarantine on the item itself. Job-only failure left last_error_code as
+    // stranded_after_interrupt, so system-rescue kept re-queueing doomed research.
     await dbTransaction(async (client) => {
+      await client.query(
+        `UPDATE outreach.drafting_items
+            SET last_error_code = $2,
+                last_error_message = $3,
+                updated_at = now()
+          WHERE id = $1`,
+        [item.id, EMPTY_RESEARCH_BRIEF_ERROR_CODE, EMPTY_BRIEF_TERMINAL_MESSAGE],
+      );
       await transitionItemState(client, item.id, 'failed_research', true);
       await refreshCompletionTimestamps(client, item.workspace_id);
     });
@@ -641,6 +651,16 @@ async function handleResearch(jobId: string): Promise<ProcessDraftingJobResult> 
       });
     }
     await dbTransaction(async (client) => {
+      // Persist on the item so NON_AUTO_RETRY_ERROR_CODES can stop system-rescue
+      // thrash (job-only errors were overwritten by stranded_after_interrupt).
+      await client.query(
+        `UPDATE outreach.drafting_items
+            SET last_error_code = 'research_provider_error',
+                last_error_message = $2,
+                updated_at = now()
+          WHERE id = $1`,
+        [item.id, message.slice(0, 1000)],
+      );
       await transitionItemState(client, item.id, 'failed_research', true);
       await refreshCompletionTimestamps(client, item.workspace_id);
     });

@@ -6,7 +6,11 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 PROJECT="${GCP_PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}"
-ZONE="${GCP_ZONE:-us-central1-a}"
+if [[ -f "$(dirname "$0")/.deploy-env" ]]; then
+  # shellcheck disable=SC1091
+  source "$(dirname "$0")/.deploy-env"
+fi
+ZONE="${GCP_ZONE:-us-west1-a}"
 INSTANCE="${GCP_INSTANCE:-helios-orch-worker}"
 ENV_FILE="${WORKER_ENV_FILE:-scripts/gcp/worker.env}"
 

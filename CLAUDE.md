@@ -53,5 +53,10 @@ qualitative reading of research output as acceptance.
 - Build milestones strictly in order (M0→M8), one at a time, meeting each Accept criterion
   before moving on, and report at every milestone boundary.
 - Environment: Next.js on Vercel; Supabase (keys in `.env.local`; tables not yet loaded —
-  loading is M0); Inngest for jobs; psql 16 is installed (on user PATH; use a fresh
+  loading is M0); Postgres orchestration worker on GCP VM `helios-orch-worker`
+  (`docs/gcp-e2-micro-worker.md`); psql 16 is installed (on user PATH; use a fresh
   terminal). Authz is app-code, not RLS (see `planning/02-data-model.md` §Authorization).
+- **Worker sync:** Vercel does not run the worker. Any change to orchestration /
+  drafting / extraction / send-queue worker logic or worker env vars must also
+  redeploy the GCP VM via `./scripts/gcp/deploy-worker-code.sh` in the same
+  session (see `.cursor/rules/gcp-worker-sync.mdc`).

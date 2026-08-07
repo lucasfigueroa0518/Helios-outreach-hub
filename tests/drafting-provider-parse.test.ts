@@ -102,3 +102,32 @@ test('parseDraftOutput rejects missing subject', () => {
     },
   }), /subject/);
 });
+
+test('parseDraftOutput coerces resolution-shaped claimType to prospect_fact', () => {
+  const draft = parseDraftOutput({
+    schemaVersion: '1',
+    subject: 'Quick note',
+    bodyText: 'Hi Sam. Congrats on the listing.',
+    resolutionUsed: 'role_segment',
+    usedFactIds: ['f1'],
+    claimLedger: [{
+      exactText: 'Congrats on the listing.',
+      factIds: ['f1'],
+      claimType: 'role_segment',
+      temporalFraming: 'none',
+    }],
+    askForm: 'reply',
+    checks: {
+      reasonClearInFirstThreeSentences: true,
+      oneIdea: true,
+      oneReason: true,
+      oneAsk: true,
+      noInventedSpecifics: true,
+      noVendorPattern: true,
+      noEmDash: true,
+      noMarketingFormatting: true,
+      senderFactsFromProvidedSourcesOnly: true,
+    },
+  });
+  assert.equal(draft.claimLedger[0]?.claimType, 'prospect_fact');
+});

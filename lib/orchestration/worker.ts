@@ -106,6 +106,20 @@ export class OrchestrationWorker {
       await unregisterWorker(this.workerId).catch(() => undefined);
       return;
     }
+    const { releaseOwnedInFlightOnStartup } = await import('@/lib/orchestration/repository');
+    const reclaimed = await releaseOwnedInFlightOnStartup(this.workerId).catch((error) => {
+      log('warn', 'startup_lease_reclaim_failed', {
+        workerId: this.workerId,
+        error: errorMessage(error),
+      });
+      return 0;
+    });
+    if (reclaimed > 0) {
+      log('warn', 'startup_lease_reclaim', {
+        workerId: this.workerId,
+        reclaimed,
+      });
+    }
     await enqueueReconciliation('worker_start');
     if (this.stopping) {
       await unregisterWorker(this.workerId).catch(() => undefined);

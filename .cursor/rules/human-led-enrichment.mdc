@@ -1,0 +1,13 @@
+---
+description: Keep live enrichment human-triggered and automated tests offline
+alwaysApply: true
+---
+
+# Human-led enrichment
+
+- Automated tests and agent-driven development runs never call the live Claude API or `web_search`.
+- A human clicking **Enrich** in the app authorizes the full live waterfall only for newly uploaded entries in that run.
+- Never start a live run autonomously, sweep existing database rows, or use stored contacts as enrichment targets.
+- The database is lookup-only and may be consulted reactively for each uploaded lead.
+- Keep offline fixtures to 1–2 items. Ask before any autonomous action that could exceed ~$1.50.
+- Human manual runs judge model/research quality. Agents may report objective telemetry and failures, but do not self-approve live output quality.

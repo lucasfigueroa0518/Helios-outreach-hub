@@ -416,6 +416,16 @@ function asAttestation(value: unknown): boolean {
   return typeof value === 'boolean' ? value : true;
 }
 
+const CLAIM_TYPES = ['prospect_fact', 'sender_fact', 'relationship_fact'] as const;
+
+/** Models sometimes confuse claimType with resolutionUsed (e.g. role_segment). */
+function coerceClaimType(value: unknown): (typeof CLAIM_TYPES)[number] {
+  if (typeof value === 'string' && (CLAIM_TYPES as readonly string[]).includes(value)) {
+    return value as (typeof CLAIM_TYPES)[number];
+  }
+  return 'prospect_fact';
+}
+
 function parseClaimLedger(value: unknown, path: string): DraftClaimLedgerEntry[] {
   if (!Array.isArray(value)) throw new Error(`Invalid claimLedger at ${path}`);
   return value.map((item, index) => {
@@ -423,11 +433,7 @@ function parseClaimLedger(value: unknown, path: string): DraftClaimLedgerEntry[]
     return {
       exactText: asString(item.exactText, `${path}[${index}].exactText`),
       factIds: asStringArray(item.factIds, `${path}[${index}].factIds`),
-      claimType: asEnum(
-        item.claimType,
-        ['prospect_fact', 'sender_fact', 'relationship_fact'] as const,
-        `${path}[${index}].claimType`,
-      ),
+      claimType: coerceClaimType(item.claimType),
       temporalFraming: asEnum(
         item.temporalFraming,
         [

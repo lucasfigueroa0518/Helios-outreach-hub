@@ -1,0 +1,66 @@
+---
+description: Keep the GCP orchestration worker in sync when worker code or env changes
+alwaysApply: true
+---
+
+# GCP orchestration worker sync (permanent)
+
+Production queue/drafting execution does **not** run on Vercel. It runs on the
+always-on GCP VM `helios-orch-worker` (`us-west1-a`, project
+`helios-influencer-network`, systemd unit `helios-worker`).
+
+Vercel deploys only the Next.js app. Shipping orchestration handlers, drafting
+jobs, extraction, send-queue, or worker env changes without updating this VM
+leaves production stuck on old worker code (classic symptom:
+`No orchestration handler registered for …`).
+
+## When you MUST redeploy the worker
+
+Do this in the **same session** as the app change (do not wait to be asked),
+whenever you change any of:
+
+- `lib/orchestration/**`, `lib/drafting/**`, `lib/pre-enriched-ingest.ts`,
+  `lib/storage.ts`, `lib/mailbox-verify.ts`, send-queue / Resend worker paths
+- `scripts/orchestration_worker.ts` or worker bootstrap/deploy scripts
+- Required worker secrets / env vars (also update
+  `scripts/gcp/worker.env.example` and the gitignored `scripts/gcp/worker.env`)
+
+## How to redeploy
+
+```bash
+# Uses scripts/gcp/.deploy-env for project/zone/instance
+./scripts/gcp/deploy-worker-code.sh
+```
+
+That pushes current repo code, uploads `scripts/gcp/worker.env` if present,
+runs `npm ci` on the VM, and restarts `helios-worker`.
+
+Verify:
+
+```bash
+gcloud compute ssh helios-orch-worker --zone=us-west1-a \
+  --command='sudo systemctl status helios-worker --no-pager'
+npm run worker:status
+```
+
+## Env discipline
+
+- Worker secrets live in `scripts/gcp/worker.env` (gitignored). Never commit it.
+- Keep `scripts/gcp/worker.env.example` aligned with required keys (including
+  `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for Storage, and a
+  live `ANTHROPIC_API_KEY` — a disabled Anthropic org breaks research for every
+  user with `This organization has been disabled`).
+- When adding a new env var the worker needs: update example → copy into local
+  `worker.env` → redeploy so the VM gets it.
+- After rotating Anthropic / Supabase / Resend keys in `.env.local`, sync the
+  same values into `scripts/gcp/worker.env` and redeploy. Do not assume the VM
+  picked them up.
+- Prefer `DIRECT_DATABASE_URL` on the worker; keep concurrency low on e2-micro.
+- `deploy-worker-code.sh` probes `ANTHROPIC_API_KEY` before shipping; if that
+  probe fails, fix the key first.
+
+## Do not assume
+
+- App deploy on Vercel ≠ worker updated
+- Restart alone ≠ new code (restart only if env-only and file already on VM)
+- Laptop `npm run worker` ≠ production worker
