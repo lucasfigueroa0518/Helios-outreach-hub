@@ -41,11 +41,15 @@ export type SendEmailInput = {
  * TEMP signature QA redirect — Campaign #3 only.
  * Remove after the HTML signature looks good in a real inbox.
  */
+export const SIGNATURE_TEST_CAMPAIGN_ID = '1fe7c162-cb1b-4bb0-b708-da6097d02753'; // Campaign #3
 export const SIGNATURE_TEST_TO_EMAIL = 'lafballsports@gmail.com';
 
-/** Hardcode all outbound sends to lafballsports@gmail.com for testing/QA. */
-export function resolveSendToEmail(_campaignId: string | null | undefined, _toEmail: string): string {
-  return SIGNATURE_TEST_TO_EMAIL;
+/** Apply the Campaign #3 signature-test recipient override when applicable. */
+export function resolveSendToEmail(campaignId: string | null | undefined, toEmail: string): string {
+  if ((campaignId ?? '').trim().toLowerCase() === SIGNATURE_TEST_CAMPAIGN_ID) {
+    return SIGNATURE_TEST_TO_EMAIL;
+  }
+  return toEmail.trim().toLowerCase();
 }
 
 export type SendEmailResult = {
