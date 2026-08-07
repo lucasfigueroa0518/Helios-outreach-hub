@@ -66,27 +66,72 @@ async function main() {
 
   await dbTransaction(async (client) => {
     if (workspaceIds.length) {
+      const itemSubquery = `SELECT id FROM outreach.drafting_items WHERE workspace_id = ANY($1::uuid[])`;
+      const runSubquery = `SELECT id FROM outreach.drafting_runs WHERE workspace_id = ANY($1::uuid[])`;
+
+      await client.query(
+        `DELETE FROM outreach.email_send_queue
+         WHERE drafting_item_id IN (${itemSubquery})`,
+        [workspaceIds],
+      );
+      await client.query(
+        `DELETE FROM outreach.email_sends
+         WHERE drafting_item_id IN (${itemSubquery})`,
+        [workspaceIds],
+      );
       await client.query(
         `DELETE FROM outreach.email_drafts
-         WHERE drafting_item_id IN (
-           SELECT id FROM outreach.drafting_items WHERE workspace_id = ANY($1::uuid[])
-         )`,
+         WHERE drafting_item_id IN (${itemSubquery})`,
         [workspaceIds],
-      ).catch(() => undefined);
+      );
+      await client.query(
+        `DELETE FROM outreach.drafting_job_cost_events
+         WHERE drafting_item_id IN (${itemSubquery})
+            OR drafting_job_id IN (
+                 SELECT id FROM outreach.drafting_jobs
+                  WHERE drafting_item_id IN (${itemSubquery})
+               )
+            OR drafting_run_id IN (${runSubquery})`,
+        [workspaceIds],
+      );
       await client.query(
         `DELETE FROM outreach.drafting_jobs
-         WHERE drafting_item_id IN (
-           SELECT id FROM outreach.drafting_items WHERE workspace_id = ANY($1::uuid[])
-         )`,
+         WHERE drafting_item_id IN (${itemSubquery})
+            OR drafting_run_id IN (${runSubquery})`,
         [workspaceIds],
-      ).catch(() => undefined);
+      );
       await client.query(
-        `DELETE FROM outreach.drafting_research_packets
-         WHERE drafting_item_id IN (
-           SELECT id FROM outreach.drafting_items WHERE workspace_id = ANY($1::uuid[])
-         )`,
+        `DELETE FROM outreach.drafting_run_items
+         WHERE drafting_run_id IN (${runSubquery})
+            OR drafting_item_id IN (${itemSubquery})`,
         [workspaceIds],
-      ).catch(() => undefined);
+      );
+      await client.query(
+        `DELETE FROM outreach.drafting_run_cost_opening_balances
+         WHERE drafting_run_id IN (${runSubquery})`,
+        [workspaceIds],
+      );
+      await client.query(
+        `DELETE FROM outreach.drafting_runs WHERE workspace_id = ANY($1::uuid[])`,
+        [workspaceIds],
+      );
+      await client.query(
+        `DELETE FROM outreach.draft_research_packets
+         WHERE drafting_item_id IN (${itemSubquery})`,
+        [workspaceIds],
+      );
+      await client.query(
+        `DELETE FROM outreach.draft_company_context
+         WHERE workspace_id = ANY($1::uuid[])
+            OR source_drafting_item_id IN (${itemSubquery})`,
+        [workspaceIds],
+      );
+      await client.query(
+        `DELETE FROM outreach.drafting_company_research_leases
+         WHERE workspace_id = ANY($1::uuid[])
+            OR owner_item_id IN (${itemSubquery})`,
+        [workspaceIds],
+      );
       await client.query(
         `DELETE FROM outreach.drafting_items WHERE workspace_id = ANY($1::uuid[])`,
         [workspaceIds],
@@ -118,13 +163,13 @@ async function main() {
          SET source_campaign_lead_run_id = NULL
          WHERE source_campaign_lead_run_id = ANY($1::uuid[])`,
         [runIds],
-      ).catch(() => undefined);
+      );
       await client.query(
         `UPDATE outreach.drafting_run_items
          SET source_enrichment_run_id = NULL
          WHERE source_enrichment_run_id = ANY($1::uuid[])`,
         [runIds],
-      ).catch(() => undefined);
+      );
     }
 
     if (leadIds.length) {

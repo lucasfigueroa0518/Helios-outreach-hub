@@ -743,6 +743,40 @@ a.segmented__item { text-decoration: none; }
   font-size: var(--font-size-lg);
   line-height: 1;
 }
+.hub-overview__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+.hub-overview__actions .hub-tutorial-trigger {
+  flex: 1;
+  min-width: 140px;
+}
+.hub-skill-dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+  cursor: pointer;
+  pointer-events: auto; /* Allow direct click to download */
+  transition: opacity var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+  white-space: nowrap;
+}
+.hub-skill-dl-btn:hover {
+  opacity: 0.94;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
 .hub-plane-flight,
 .plane-flight {
   position: absolute;
@@ -1232,6 +1266,95 @@ a.segmented__item { text-decoration: none; }
 .tutorial-reactivation strong { color: var(--color-text); font-size: var(--font-size-xs); }
 .tutorial-output-file small,
 .tutorial-reactivation small { color: var(--color-text-muted); font-size: var(--font-size-xs); }
+
+/* Apollo Cowork Visual & Skill Download */
+.tutorial-visual--apollo {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.tutorial-cowork__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-primary) 15%, transparent);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.tutorial-cowork__badge--apollo {
+  background: color-mix(in srgb, var(--color-positive) 15%, transparent);
+  color: var(--color-positive);
+}
+
+.tutorial-apollo-pipeline {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.tutorial-apollo-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-size: var(--font-size-xs);
+  opacity: 0;
+  transform: translateY(var(--space-2));
+  animation: tutorial-result-in var(--transition-base) forwards;
+}
+
+.tutorial-apollo-stage strong {
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.tutorial-apollo-stage span {
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.tutorial-skill-download-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 35%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-surface));
+}
+
+.tutorial-skill-download-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tutorial-skill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  font-size: 11px;
+  font-weight: var(--font-weight-bold);
+  font-family: var(--font-mono, monospace);
+}
 
 .tutorial-visual--web {
   display: flex;

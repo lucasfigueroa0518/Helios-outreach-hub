@@ -3679,7 +3679,11 @@ export async function refreshCompletionTimestamps(
     `UPDATE outreach.drafting_workspaces
      SET generation_completed_at = CASE WHEN $2 THEN coalesce(generation_completed_at, now()) ELSE NULL END,
          review_completed_at = CASE WHEN $3 THEN coalesce(review_completed_at, now()) ELSE NULL END,
-         status = CASE WHEN $3 THEN 'review_complete' ELSE 'active' END,
+         status = CASE
+           WHEN status = 'paused' THEN 'paused'
+           WHEN $3 THEN 'review_complete'
+           ELSE 'active'
+         END,
          updated_at = now()
      WHERE id = $1`,
     [workspaceId, generationComplete, reviewComplete],
