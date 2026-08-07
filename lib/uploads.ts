@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { mapPool } from '@/lib/async-pool';
 import { dbQuery, dbTransaction } from '@/lib/db';
+import { extractUpload } from '@/lib/extraction';
 import { ensureStagingRun } from '@/lib/runs';
-import { createSignedUpload, removeStoredObject } from '@/lib/storage';
+import { downloadStoredObject, createSignedUpload, removeStoredObject } from '@/lib/storage';
 import { isSheetUploadKind, sniffUpload } from '@/lib/upload-types';
 
 export type Upload = {
@@ -59,6 +61,8 @@ function slimExtractionSummary(summary: Upload['extraction_summary']): Upload['e
   const record = summary as Record<string, unknown>;
   return {
     people_found: record.people_found,
+    people_counted: record.people_counted,
+    people_count_provisional: record.people_count_provisional,
     warnings: record.warnings,
     cache_hit: record.cache_hit,
     progress: record.progress,
@@ -241,3 +245,97 @@ export async function removeUpload(uploadId: string, campaignId: string, ownerId
     // be cleaned up later without blocking the user’s staging flow.
   }
 }
+
+type SeedableUpload = {
+  id: string;
+  file_name: string;
+  storage_path: string;
+  status: string;
+};
+
+async function writePeopleCount(
+  uploadId: string,
+  peopleFound: number,
+  extra: Record<string, unknown> = {},
+) {
+  await dbQuery(
+    `UPDATE outreach.uploads
+        SET extraction_summary = coalesce(extraction_summary, '{}'::jsonb)
+          || $2::jsonb
+      WHERE id = $1`,
+    [
+      uploadId,
+      JSON.stringify({
+        people_found: peopleFound,
+        people_counted: true,
+        ...extra,
+      }),
+    ],
+  );
+}
+
+/**
+ * Count leads for staged uploads so the campaign cost gate updates in unison
+ * with staging (all campaign types). Sheets/docs get a real offline parse;
+ * images/PDFs use 1 provisional lead until live enrichment overwrites the count.
+ * Does not change upload status.
+ */
+export async function seedLeadCountsForStagedUploads(input: {
+  campaignId: string;
+  ownerId: string;
+  uploadIds?: string[];
+  maxFiles?: number;
+}): Promise<number> {
+  const maxFiles = Math.max(1, Math.min(input.maxFiles ?? 20, 50));
+  const { rows } = await dbQuery<SeedableUpload>(
+    `SELECT u.id, u.file_name, u.storage_path, u.status
+       FROM outreach.uploads u
+       JOIN outreach.runs r ON r.id = u.run_id
+       JOIN outreach.campaigns c ON c.id = r.campaign_id
+      WHERE c.id = $1
+        AND c.owner_id = $2
+        AND u.status IN ('uploaded', 'extracted')
+        AND ($3::uuid[] IS NULL OR u.id = ANY($3::uuid[]))
+        AND coalesce(u.extraction_summary->>'people_counted', 'false') <> 'true'
+      ORDER BY u.created_at ASC
+      LIMIT $4`,
+    [input.campaignId, input.ownerId, input.uploadIds ?? null, maxFiles],
+  );
+  if (!rows.length) return 0;
+
+  const outcomes = await mapPool(rows, 2, async (upload) => {
+    try {
+      const bytes = await downloadStoredObject(upload.storage_path);
+      const sniffed = sniffUpload(upload.file_name, bytes.subarray(0, 32));
+      const extension = upload.file_name.split('.').pop()?.toLowerCase() ?? '';
+      const looksLikeImage = sniffed?.kind === 'image'
+        || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'heif', 'tif', 'tiff'].includes(extension);
+      const looksLikePdf = sniffed?.kind === 'pdf' || extension === 'pdf';
+
+      // Images/PDFs need live vision; stage with 1 provisional lead for the cost gate.
+      if (looksLikeImage || looksLikePdf) {
+        await writePeopleCount(upload.id, 1, { people_count_provisional: true });
+        return true;
+      }
+
+      if (!sniffed) {
+        await writePeopleCount(upload.id, 0);
+        return false;
+      }
+
+      const result = await extractUpload(bytes, upload.file_name, upload.id);
+      await writePeopleCount(upload.id, result.people.length, {
+        people_count_provisional: false,
+        warnings: result.warnings,
+      });
+      return true;
+    } catch {
+      await writePeopleCount(upload.id, 0).catch(() => undefined);
+      return false;
+    }
+  });
+  return outcomes.filter(Boolean).length;
+}
+
+/** @deprecated Use seedLeadCountsForStagedUploads */
+export const seedPeopleFoundForStagedSheets = seedLeadCountsForStagedUploads;

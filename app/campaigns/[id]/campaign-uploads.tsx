@@ -42,6 +42,8 @@ type Upload = {
   status: string;
   extraction_summary: {
     people_found?: number;
+    people_counted?: boolean;
+    people_count_provisional?: boolean;
     warnings?: string[];
     progress?: { stage?: string; percent?: number; message?: string };
   } | null;
@@ -183,13 +185,27 @@ export function CampaignUploads({
     && uploads.some((upload) => upload.status === 'extracted');
   const showGoToReview = !preEnriched && enrichmentComplete && !canEnrich;
   const hasPendingUploads = uploads.some((upload) => upload.status === 'pending_upload');
-  const readySheetCount = uploads.filter((upload) =>
+  const stagedFileCount = uploads.filter((upload) =>
     upload.status === 'uploaded' || upload.status === 'extracted',
   ).length;
+  const readySheetCount = stagedFileCount;
   const overCostCap = Boolean(costGate?.over_cap);
   const uploadsBlockedByCap = Boolean(costGate?.at_or_over_cap);
   const canGoToDraft = preEnriched && readySheetCount > 0 && !hasPendingUploads && !busy
     && !draftWorkspaceActive && !overCostCap;
+  const showCostPanel = Boolean(costGate && (costGate.lead_count > 0 || stagedFileCount > 0));
+
+  function applyStagingCost(data: {
+    uploads?: Upload[];
+    cost_gate?: CostGate | null;
+    cost_estimate?: CostEstimate | null;
+  }) {
+    if (data.cost_gate) setCostGate(data.cost_gate);
+    if (data.cost_estimate) setCostEstimate(data.cost_estimate);
+    if (data.uploads) {
+      setUploads(dedupeUploads(data.uploads));
+    }
+  }
 
   useEffect(() => {
     setDraftWorkspaceActive(draftEnabledInitial);
@@ -439,17 +455,16 @@ export function CampaignUploads({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ completions: batch }),
         });
-        const result = await resultResponse.json() as { uploads?: Upload[]; error?: string };
+        const result = await resultResponse.json() as {
+          uploads?: Upload[];
+          cost_gate?: CostGate;
+          cost_estimate?: CostEstimate;
+          error?: string;
+        };
         if (!resultResponse.ok) {
           throw new Error(result.error ?? 'Unable to finalize uploads');
         }
-        const updated = result.uploads ?? [];
-        if (updated.length) {
-          setUploads((current) => {
-            const byId = new Map(updated.map((upload) => [upload.id, upload]));
-            return current.map((upload) => byId.get(upload.id) ?? upload);
-          });
-        }
+        applyStagingCost(result);
       } catch (error) {
         prepareErrors.push(error instanceof Error ? error.message : 'Unable to finalize uploads');
       }
@@ -499,10 +514,21 @@ export function CampaignUploads({
       const response = await fetch(`/api/campaigns/${campaignId}/uploads?upload_id=${encodeURIComponent(uploadId)}`, {
         method: 'DELETE',
       });
-      const data = await response.json();
+      const data = await response.json() as {
+        ok?: boolean;
+        uploads?: Upload[];
+        cost_gate?: CostGate;
+        cost_estimate?: CostEstimate;
+        error?: string;
+      };
       if (!response.ok) throw new Error(data.error ?? 'Unable to remove upload');
-      setUploads((current) => current.filter((upload) => upload.id !== uploadId));
-      await loadUploads();
+      if (data.uploads) {
+        applyStagingCost(data);
+      } else {
+        setUploads((current) => current.filter((upload) => upload.id !== uploadId));
+        if (data.cost_gate) setCostGate(data.cost_gate);
+        if (data.cost_estimate) setCostEstimate(data.cost_estimate);
+      }
     } catch (error) {
       setMessage({ text: error instanceof Error ? error.message : 'Unable to remove upload', tone: 'error' });
     }
@@ -800,8 +826,8 @@ export function CampaignUploads({
               : reviewEnabledInitial || uploads.some((upload) => upload.status === 'extracted')
           }
         />
-        {costGate && costGate.lead_count > 0 ? (
-          <div className={`campaign-cost-panel${costGate.over_cap ? ' campaign-cost-panel--over' : ''}`}>
+        {showCostPanel ? (
+          <div className={`campaign-cost-panel${costGate!.over_cap ? ' campaign-cost-panel--over' : ''}`}>
             <button
               type="button"
               className="campaign-cost-panel__toggle"
@@ -809,10 +835,14 @@ export function CampaignUploads({
               onClick={() => setCostPanelOpen((open) => !open)}
             >
               <span className="campaign-cost-estimate__badge">
-                {costGate.method === 'historical_avg' ? 'Hist. Estimate' : 'Campaign Estimate'}
+                {costGate!.lead_count > 0
+                  ? (costGate!.method === 'historical_avg' ? 'Hist. Estimate' : 'Campaign Estimate')
+                  : 'Estimating…'}
               </span>
               <span>
-                Est. ${costGate.estimated_total_usd.toFixed(2)} · {costGate.lead_count} leads
+                {costGate!.lead_count > 0
+                  ? `Est. $${costGate!.estimated_total_usd.toFixed(2)} · ${costGate!.lead_count} leads`
+                  : 'Counting leads as files stage…'}
               </span>
               <span className="campaign-cost-panel__chevron" aria-hidden="true">
                 {costPanelOpen ? '▾' : '▸'}
@@ -820,19 +850,27 @@ export function CampaignUploads({
             </button>
             {costPanelOpen ? (
               <div className="campaign-cost-panel__body" aria-live="polite">
-                <p>
-                  ${costGate.per_lead_usd.toFixed(2)}/lead · ${costGate.cap_usd.toFixed(0)} campaign cap
-                  {costGate.remaining_usd >= 0
-                    ? ` · $${costGate.remaining_usd.toFixed(2)} remaining`
-                    : ''}
-                </p>
-                <p className="text-muted">{costGate.note || costEstimate?.note}</p>
-                {costGate.over_cap ? (
-                  <p className="field__error" role="alert">
-                    Over cap — remove at least {costGate.leads_to_remove} lead
-                    {costGate.leads_to_remove === 1 ? '' : 's'} to Enrich or Go to Draft.
+                {costGate!.lead_count > 0 ? (
+                  <>
+                    <p>
+                      ${costGate!.per_lead_usd.toFixed(2)}/lead · ${costGate!.cap_usd.toFixed(0)} campaign cap
+                      {costGate!.remaining_usd >= 0
+                        ? ` · $${costGate!.remaining_usd.toFixed(2)} remaining`
+                        : ''}
+                    </p>
+                    <p className="text-muted">{costGate!.note || costEstimate?.note}</p>
+                    {costGate!.over_cap ? (
+                      <p className="field__error" role="alert">
+                        Over cap — remove at least {costGate!.leads_to_remove} lead
+                        {costGate!.leads_to_remove === 1 ? '' : 's'} to Enrich or Go to Draft.
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-muted">
+                    Cost updates as each file finishes staging.
                   </p>
-                ) : null}
+                )}
               </div>
             ) : null}
           </div>
@@ -911,7 +949,7 @@ export function CampaignUploads({
             ? (uploadProgress.phase === 'preparing'
               ? `Preparing ${uploadProgress.total} file${uploadProgress.total === 1 ? '' : 's'}…`
               : uploadProgress.phase === 'finalizing'
-                ? 'Finalizing…'
+                ? 'Staging & estimating cost…'
                 : `Uploading ${uploadProgress.completed} of ${uploadProgress.total}…`)
             : busy
               ? 'Uploading files…'

@@ -6,11 +6,13 @@ import {
   markUploadComplete,
   markUploadsComplete,
   removeUpload,
+  seedLeadCountsForStagedUploads,
   UPLOAD_INTENT_BATCH_LIMIT,
 } from '@/lib/uploads';
 import {
   buildCampaignCostGate,
   costCapBlockMessage,
+  type CampaignCostGate,
 } from '@/lib/campaign-cost-cap';
 import { dbQuery } from '@/lib/db';
 import { getCampaign } from '@/lib/campaigns';
@@ -37,6 +39,38 @@ async function campaignLeadCount(campaignId: string) {
   return Number(rows[0]?.count ?? 0);
 }
 
+async function stagingCostSnapshot(campaignId: string, ownerId: string): Promise<{
+  uploads: Awaited<ReturnType<typeof listCampaignUploads>>;
+  cost_gate: CampaignCostGate;
+  cost_estimate: CampaignCostGate['estimate'];
+}> {
+  const uploads = await listCampaignUploads(campaignId, ownerId);
+  const fromUploads = leadCountFromUploads(uploads);
+  const leadCount = fromUploads > 0 ? fromUploads : await campaignLeadCount(campaignId);
+  const campaign = await getCampaign(ownerId, campaignId);
+  const cost_gate = await buildCampaignCostGate({
+    campaignId,
+    needsEnrichment: campaign?.needs_enrichment ?? true,
+    fallbackLeadCount: leadCount,
+  });
+  return {
+    uploads,
+    cost_gate,
+    cost_estimate: cost_gate.estimate,
+  };
+}
+
+/** Count leads on newly staged files, then return uploads + cost gate together. */
+async function finalizeStagingCost(input: {
+  campaignId: string;
+  ownerId: string;
+  uploadIds?: string[];
+  maxFiles?: number;
+}) {
+  await seedLeadCountsForStagedUploads(input);
+  return stagingCostSnapshot(input.campaignId, input.ownerId);
+}
+
 export async function GET(_: NextRequest, { params }: RouteContext) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -44,23 +78,30 @@ export async function GET(_: NextRequest, { params }: RouteContext) {
 
   try {
     const runState = await getCampaignRunState(id, session.userId, true);
-    const uploads = await listCampaignUploads(id, session.userId);
+    let uploads = await listCampaignUploads(id, session.userId);
+    // Backfill any staged files that never got a staging-time count.
+    const needsPeopleCount = uploads.some(
+      (u) =>
+        (u.status === 'uploaded' || u.status === 'extracted')
+        && u.extraction_summary?.people_counted !== true,
+    );
+    if (needsPeopleCount) {
+      await seedLeadCountsForStagedUploads({
+        campaignId: id,
+        ownerId: session.userId,
+        maxFiles: 20,
+      });
+      uploads = await listCampaignUploads(id, session.userId);
+    }
     const review_enabled = await campaignHasReviewableData(id);
-    const fromUploads = leadCountFromUploads(uploads);
-    const leadCount = fromUploads > 0 ? fromUploads : await campaignLeadCount(id);
-    const campaign = await getCampaign(session.userId, id);
-    const cost_gate = await buildCampaignCostGate({
-      campaignId: id,
-      needsEnrichment: campaign?.needs_enrichment ?? true,
-      fallbackLeadCount: leadCount,
-    });
+    const cost = await stagingCostSnapshot(id, session.userId);
     return NextResponse.json({
-      uploads,
+      uploads: cost.uploads,
       ...runState,
       review_enabled,
       research_concurrency: Math.max(1, Number(process.env.ORG_RESEARCH_CONCURRENCY ?? 2)),
-      cost_estimate: cost_gate.estimate,
-      cost_gate,
+      cost_estimate: cost.cost_estimate,
+      cost_gate: cost.cost_gate,
     });
   } catch (error) {
     return NextResponse.json(
@@ -92,20 +133,13 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     if (!campaign) {
       return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
     }
-    const uploads = await listCampaignUploads(id, session.userId);
-    const fromUploads = leadCountFromUploads(uploads);
-    const leadCount = fromUploads > 0 ? fromUploads : await campaignLeadCount(id);
-    const costGate = await buildCampaignCostGate({
-      campaignId: id,
-      needsEnrichment: campaign.needs_enrichment,
-      fallbackLeadCount: leadCount,
-    });
-    if (costGate.at_or_over_cap) {
+    const cost = await stagingCostSnapshot(id, session.userId);
+    if (cost.cost_gate.at_or_over_cap) {
       return NextResponse.json(
         {
-          error: costCapBlockMessage(costGate) || 'Campaign is at the $50 cost cap — remove leads before uploading more files.',
+          error: costCapBlockMessage(cost.cost_gate) || 'Campaign is at the $50 cost cap — remove leads before uploading more files.',
           code: 'campaign_cost_cap',
-          cost_gate: costGate,
+          cost_gate: cost.cost_gate,
         },
         { status: 402 },
       );
@@ -162,7 +196,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 export async function PATCH(request: NextRequest, { params }: RouteContext) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  await params;
+  const { id } = await params;
 
   let body: {
     upload_id?: string;
@@ -188,22 +222,43 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
           );
         }
       }
-      const uploads = await markUploadsComplete(
+      await markUploadsComplete(
         session.userId,
         body.completions.map((item) => ({
           uploadId: item.upload_id!,
           success: item.success!,
         })),
       );
-      return NextResponse.json({ uploads });
+      const successIds = body.completions
+        .filter((item) => item.success)
+        .map((item) => item.upload_id!)
+        .filter(Boolean);
+      const cost = await finalizeStagingCost({
+        campaignId: id,
+        ownerId: session.userId,
+        uploadIds: successIds.length ? successIds : undefined,
+        maxFiles: Math.min(Math.max(successIds.length, 1), 50),
+      });
+      return NextResponse.json(cost);
     }
 
     if (!body.upload_id || typeof body.success !== 'boolean') {
       return NextResponse.json({ error: 'upload_id and success are required' }, { status: 400 });
     }
 
+    await markUploadComplete(body.upload_id, session.userId, body.success);
+    const cost = body.success
+      ? await finalizeStagingCost({
+          campaignId: id,
+          ownerId: session.userId,
+          uploadIds: [body.upload_id],
+          maxFiles: 1,
+        })
+      : await stagingCostSnapshot(id, session.userId);
+    const refreshed = cost.uploads.find((row) => row.id === body.upload_id);
     return NextResponse.json({
-      upload: await markUploadComplete(body.upload_id, session.userId, body.success),
+      upload: refreshed,
+      ...cost,
     });
   } catch (error) {
     return NextResponse.json(
@@ -222,7 +277,8 @@ export async function DELETE(request: NextRequest, { params }: RouteContext) {
 
   try {
     await removeUpload(uploadId, id, session.userId);
-    return NextResponse.json({ ok: true });
+    const cost = await stagingCostSnapshot(id, session.userId);
+    return NextResponse.json({ ok: true, ...cost });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Unable to remove upload' },

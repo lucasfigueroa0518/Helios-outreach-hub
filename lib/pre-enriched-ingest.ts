@@ -190,6 +190,8 @@ async function extractStagingUpload(upload: StagingUpload): Promise<ExtractionRe
       hash,
       JSON.stringify({
         people_found: result.people.length,
+        people_counted: true,
+        people_count_provisional: false,
         warnings: result.warnings,
         cache_hit: false,
         // Keep result for assemble/re-read of this file only (not returned by slim list).

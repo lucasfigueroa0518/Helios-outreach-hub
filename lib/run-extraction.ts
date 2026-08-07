@@ -69,6 +69,8 @@ export async function extractOneUpload(runId: string, uploadId: string) {
        WHERE id = $1`,
       [uploadId, qualityFailed ? 'failed_quality' : 'extracted', JSON.stringify({
         people_found: result.people.length,
+        people_counted: true,
+        people_count_provisional: false,
         warnings: result.warnings,
         cache_hit: Boolean(cachedResult),
         result,
