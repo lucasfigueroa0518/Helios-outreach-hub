@@ -6,8 +6,14 @@ import { signIn } from 'next-auth/react';
 
 function errorMessage(code: string | null): string | null {
   if (!code) return null;
-  if (code === 'AccessDenied' || code === 'Configuration' || code === 'SignIn') {
+  if (code === 'AccessDenied') {
     return "This account isn't authorized to sign in.";
+  }
+  if (code === 'Configuration') {
+    return 'Sign-in is misconfigured on the server (usually missing database or auth env vars). Check Vercel Production environment variables.';
+  }
+  if (code === 'SignIn') {
+    return 'Sign-in failed. Please try again.';
   }
   if (code === 'OAuthAccountNotLinked') {
     return 'That Google account could not be linked. Try another account.';

@@ -51,10 +51,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       try {
         await upsertUserByEmail(email);
       } catch (error) {
-        console.error('[auth] AccessDenied: upsertUserByEmail failed', {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[auth] sign-in aborted: upsertUserByEmail failed', {
           domain: email.split('@')[1] ?? null,
-          message: error instanceof Error ? error.message : String(error),
+          message,
         });
+        // Surface infra failures separately from allowlist denials.
+        if (/DATABASE_URL|DIRECT_DATABASE_URL|not set|ECONN|connect/i.test(message)) {
+          return '/?error=Configuration';
+        }
         return false;
       }
       return true;
