@@ -312,17 +312,20 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     } else if (metricKey === 'open_rate') {
       title = 'Email Open Rate';
       unit = 'percent';
-      val = deliv > 0 ? opened / deliv : 0;
+      const baseDenom = deliv > 0 ? deliv : sent;
+      val = baseDenom > 0 ? opened / baseDenom : 0;
       fmt = formatPct(val);
     } else if (metricKey === 'click_rate') {
       title = 'Email Click Rate';
       unit = 'percent';
-      val = deliv > 0 ? clicked / deliv : 0;
+      const baseDenom = deliv > 0 ? deliv : sent;
+      val = baseDenom > 0 ? clicked / baseDenom : 0;
       fmt = formatPct(val);
     } else if (metricKey === 'reply_rate') {
       title = 'Email Reply Rate';
       unit = 'percent';
-      val = deliv > 0 ? replied / deliv : 0;
+      const baseDenom = deliv > 0 ? deliv : sent;
+      val = baseDenom > 0 ? replied / baseDenom : 0;
       fmt = formatPct(val);
     } else if (metricKey === 'emails_sent') {
       title = 'Emails Sent Volume';
@@ -347,17 +350,44 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     };
   }).sort((a, b) => b.metric_value - a.metric_value);
 
-  // Set total formatted summary
-  if (unit === 'usd') {
-    const tot = campaigns.reduce((acc, c) => acc + c.total_spend_usd, 0);
-    totalFormatted = formatUsd(tot);
-  } else if (unit === 'count') {
-    const tot = campaigns.reduce((acc, c) => acc + c.emails_sent, 0);
-    totalFormatted = metricKey === 'campaigns_count' ? formatCount(campaigns.length) : formatCount(tot);
-  } else if (unit === 'percent') {
-    const totalSent = campaigns.reduce((acc, c) => acc + c.emails_sent, 0);
-    const avgPct = campaigns.length > 0 ? campaigns.reduce((acc, c) => acc + c.metric_value, 0) / campaigns.length : 0;
-    totalFormatted = formatPct(avgPct);
+  // Set total formatted summary based on overall aggregate counts across campaigns
+  const totalLeads = campRows.reduce((acc, r) => acc + Number(r.lead_count), 0);
+  const totalSent = campRows.reduce((acc, r) => acc + Number(r.emails_sent), 0);
+  const totalDelivered = campRows.reduce((acc, r) => acc + Number(r.emails_delivered), 0);
+  const totalOpened = campRows.reduce((acc, r) => acc + Number(r.emails_opened), 0);
+  const totalClicked = campRows.reduce((acc, r) => acc + Number(r.emails_clicked), 0);
+  const totalReplied = campRows.reduce((acc, r) => acc + Number(r.emails_replied), 0);
+  const totalEnrichmentCost = campRows.reduce((acc, r) => acc + Number(r.enrichment_cost), 0);
+  const totalDraftingCost = campRows.reduce((acc, r) => acc + Number(r.drafting_cost), 0);
+  const totalSpend = totalEnrichmentCost + totalDraftingCost;
+
+  if (metricKey === 'spend_per_lead') {
+    totalFormatted = totalLeads > 0 ? formatUsd(totalSpend / totalLeads) : '$0.00';
+  } else if (metricKey === 'cost_per_drafting') {
+    totalFormatted = totalSent > 0 ? formatUsd(totalDraftingCost / totalSent) : '$0.00';
+  } else if (metricKey === 'cost_per_enrichment') {
+    totalFormatted = totalLeads > 0 ? formatUsd(totalEnrichmentCost / totalLeads) : '$0.00';
+  } else if (metricKey === 'aggregated_drafting') {
+    totalFormatted = formatUsd(totalDraftingCost);
+  } else if (metricKey === 'aggregated_enrichment') {
+    totalFormatted = formatUsd(totalEnrichmentCost);
+  } else if (metricKey === 'total_spend') {
+    totalFormatted = formatUsd(totalSpend);
+  } else if (metricKey === 'delivery_rate') {
+    totalFormatted = totalSent > 0 ? formatPct(totalDelivered / totalSent) : '—';
+  } else if (metricKey === 'open_rate') {
+    const baseDenom = totalDelivered > 0 ? totalDelivered : totalSent;
+    totalFormatted = baseDenom > 0 ? formatPct(totalOpened / baseDenom) : '—';
+  } else if (metricKey === 'click_rate') {
+    const baseDenom = totalDelivered > 0 ? totalDelivered : totalSent;
+    totalFormatted = baseDenom > 0 ? formatPct(totalClicked / baseDenom) : '—';
+  } else if (metricKey === 'reply_rate') {
+    const baseDenom = totalDelivered > 0 ? totalDelivered : totalSent;
+    totalFormatted = baseDenom > 0 ? formatPct(totalReplied / baseDenom) : '—';
+  } else if (metricKey === 'emails_sent') {
+    totalFormatted = formatCount(totalSent);
+  } else if (metricKey === 'campaigns_count') {
+    totalFormatted = formatCount(campaigns.length);
   }
 
   // 3. Detailed lead / email item rows query
