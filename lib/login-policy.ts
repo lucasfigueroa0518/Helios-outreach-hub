@@ -3,20 +3,30 @@
  *
  * Controlled by `ALLOWED_EMAIL_DOMAINS`:
  * - unset or `*` → any syntactically valid email (blocked in production by auth.ts)
- * - comma-separated domains (e.g. `heliosgroup.ai`) → only those
+ * - comma-separated domains (e.g. `heliosgroup.ai,heliosmarketing.org`) → only those
  */
+
+/** Strip accidental quotes/whitespace from Vercel env values. */
+export function parseAllowedEmailDomains(
+  allowlist: string | undefined = process.env.ALLOWED_EMAIL_DOMAINS,
+): string[] | '*' | null {
+  const raw = allowlist?.trim();
+  if (!raw) return null;
+  const unquoted = raw.replace(/^['"]+|['"]+$/g, '').trim();
+  if (!unquoted || unquoted === '*') return '*';
+  return unquoted
+    .split(',')
+    .map((d) => d.trim().replace(/^['"]+|['"]+$/g, '').toLowerCase())
+    .filter(Boolean);
+}
 
 export function isAllowedLoginEmail(email: string): boolean {
   const trimmed = email.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return false;
 
-  const raw = process.env.ALLOWED_EMAIL_DOMAINS?.trim();
-  if (!raw || raw === '*') return true;
+  const allowed = parseAllowedEmailDomains();
+  if (allowed === null || allowed === '*') return true;
 
-  const allowed = raw
-    .split(',')
-    .map((d) => d.trim().toLowerCase())
-    .filter(Boolean);
   const domain = trimmed.split('@')[1]?.toLowerCase();
   return Boolean(domain && allowed.includes(domain));
 }
@@ -27,8 +37,8 @@ export function isOpenAllowlistForbidden(
   allowlist: string | undefined = process.env.ALLOWED_EMAIL_DOMAINS,
 ): boolean {
   if (nodeEnv !== 'production') return false;
-  const raw = allowlist?.trim();
-  return !raw || raw === '*';
+  const allowed = parseAllowedEmailDomains(allowlist);
+  return allowed === null || allowed === '*';
 }
 
 /** @deprecated Use isAllowedLoginEmail */
