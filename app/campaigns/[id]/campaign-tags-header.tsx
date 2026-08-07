@@ -69,6 +69,7 @@ export function CampaignTagsHeader({
         <TagInputPopover
           onAddTag={addTag}
           onCancel={() => setEditing(false)}
+          excludeTags={tagDetails.map((t) => t.tag)}
         />
       ) : (
         <button

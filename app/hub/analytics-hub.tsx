@@ -536,6 +536,10 @@ export function AnalyticsHub() {
                                   <TagInputPopover
                                     onAddTag={(tagName, colorId) => handleAddTag(row.campaign_id, tagName, colorId)}
                                     onCancel={() => setEditingTagCampaignId(null)}
+                                    excludeTags={
+                                      (row.tag_details?.length ? row.tag_details : row.tags.map((t) => ({ tag: t })))
+                                        .map((item) => item.tag)
+                                    }
                                   />
                                 ) : (
                                   <button

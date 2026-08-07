@@ -435,6 +435,7 @@ function CampaignRow({
             <TagInputPopover
               onAddTag={handleAddTag}
               onCancel={() => setEditingTag(false)}
+              excludeTags={tagItems.map((item) => item.tag)}
             />
           ) : (
             <button

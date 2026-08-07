@@ -1,108 +1,155 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { Check, Plus, Palette } from 'lucide-react';
-import { TAG_COLOR_PALETTE, TagColorOption } from '@/lib/tag-colors';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Palette } from 'lucide-react';
+
+import type { TagWithColor } from '@/lib/campaigns';
+import { TAG_COLOR_PALETTE, type TagColorOption, getTagColorStyle } from '@/lib/tag-colors';
+
+const MAX_SUGGESTIONS = 8;
 
 export function TagInputPopover({
   onAddTag,
   onCancel,
+  excludeTags = [],
   placeholder = 'tag name',
 }: {
   onAddTag: (tagName: string, colorId: string) => Promise<void> | void;
   onCancel?: () => void;
+  /** Tags already on this campaign — hidden from the picker. */
+  excludeTags?: string[];
   placeholder?: string;
 }) {
   const [tagName, setTagName] = useState('');
   const [selectedColor, setSelectedColor] = useState<TagColorOption>(TAG_COLOR_PALETTE[0]);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [submitting, setSaving] = useState(false);
+  const [existingTags, setExistingTags] = useState<TagWithColor[]>([]);
+  const [highlightIndex, setHighlightIndex] = useState(0);
+  const [showSuggestions, setShowSuggestions] = useState(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const excludeSet = useMemo(
+    () => new Set(excludeTags.map((tag) => tag.trim().toLowerCase())),
+    [excludeTags],
+  );
+
+  const suggestions = useMemo(() => {
+    const query = tagName.trim().toLowerCase();
+    const available = existingTags.filter((entry) => !excludeSet.has(entry.tag.toLowerCase()));
+    const filtered = query
+      ? available.filter((entry) => entry.tag.toLowerCase().includes(query))
+      : available;
+    return filtered.slice(0, MAX_SUGGESTIONS);
+  }, [existingTags, excludeSet, tagName]);
+
+  const exactMatch = useMemo(() => {
+    const query = tagName.trim().toLowerCase();
+    if (!query) return null;
+    return suggestions.find((entry) => entry.tag.toLowerCase() === query) ?? null;
+  }, [suggestions, tagName]);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch('/api/tags');
+        if (!response.ok) return;
+        const data = await response.json() as { tags?: TagWithColor[] };
+        if (!cancelled && Array.isArray(data.tags)) {
+          setExistingTags(data.tags);
+        }
+      } catch {
+        // Suggestions are optional — free-text add still works.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setHighlightIndex(0);
+  }, [tagName, suggestions.length]);
+
+  useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setShowColorPicker(false);
+        setShowSuggestions(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  async function handleSubmit(e?: React.FormEvent) {
-    if (e) e.preventDefault();
-    const clean = tagName.trim();
+  async function submitTag(name: string, colorId: string) {
+    const clean = name.trim();
     if (!clean || submitting) return;
     setSaving(true);
     try {
-      await onAddTag(clean, selectedColor.id);
+      await onAddTag(clean, colorId);
       setTagName('');
     } finally {
       setSaving(false);
     }
   }
 
+  async function handleSubmit(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    if (exactMatch) {
+      const colorId = exactMatch.color
+        ?? getTagColorStyle(exactMatch.tag, exactMatch.color).id;
+      await submitTag(exactMatch.tag, colorId);
+      return;
+    }
+    if (
+      showSuggestions
+      && suggestions.length > 0
+      && highlightIndex >= 0
+      && highlightIndex < suggestions.length
+      && tagName.trim()
+    ) {
+      const pick = suggestions[highlightIndex]!;
+      // Only auto-pick highlighted suggestion when it matches the typed prefix.
+      if (pick.tag.toLowerCase().startsWith(tagName.trim().toLowerCase())) {
+        const colorId = pick.color ?? getTagColorStyle(pick.tag, pick.color).id;
+        await submitTag(pick.tag, colorId);
+        return;
+      }
+    }
+    await submitTag(tagName, selectedColor.id);
+  }
+
+  async function pickSuggestion(entry: TagWithColor) {
+    const colorId = entry.color ?? getTagColorStyle(entry.tag, entry.color).id;
+    // Sync swatch so the form reflects the picked tag color.
+    const matched = TAG_COLOR_PALETTE.find((c) => c.id === colorId);
+    if (matched) setSelectedColor(matched);
+    await submitTag(entry.tag, colorId);
+  }
+
+  const listOpen = showSuggestions && !showColorPicker && suggestions.length > 0;
+
   return (
     <div
       ref={containerRef}
-      style={{
-        position: 'relative',
-        display: 'inline-flex',
-        alignItems: 'center',
-      }}
+      className="tag-input"
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Floating Color Selector Pop-up */}
-      {showColorPicker && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 'calc(100% + 8px)',
-            left: 0,
-            zIndex: 100,
-            background: 'var(--color-surface)',
-            border: '1px solid var(--color-border)',
-            borderRadius: 'var(--radius-md)',
-            padding: '8px 10px',
-            boxShadow: 'var(--shadow-md)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '6px',
-            minWidth: '180px',
-            animation: 'drawer-fade 0.15s ease-out',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              fontSize: '10px',
-              fontWeight: 'bold',
-              textTransform: 'uppercase',
-              color: 'var(--color-text-subtle)',
-              letterSpacing: '0.5px',
-            }}
-          >
+      {showColorPicker ? (
+        <div className="tag-input__color-menu" role="dialog" aria-label="Tag color">
+          <div className="tag-input__color-menu-head">
             <span>Tag Color</span>
-            <span style={{ color: selectedColor.text, fontWeight: 'bold' }}>
-              {selectedColor.label}
-            </span>
+            <span style={{ color: selectedColor.text }}>{selectedColor.label}</span>
           </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(6, 1fr)',
-              gap: '6px',
-            }}
-          >
+          <div className="tag-input__color-grid">
             {TAG_COLOR_PALETTE.map((c) => {
               const isSelected = c.id === selectedColor.id;
               return (
@@ -110,110 +157,118 @@ export function TagInputPopover({
                   key={c.id}
                   type="button"
                   title={c.label}
+                  className={`tag-input__swatch${isSelected ? ' tag-input__swatch--active' : ''}`}
+                  style={{
+                    backgroundColor: c.hex,
+                    boxShadow: isSelected ? `0 0 0 2px ${c.hex}` : undefined,
+                  }}
                   onClick={() => {
                     setSelectedColor(c);
                     setShowColorPicker(false);
-                  }}
-                  style={{
-                    width: '20px',
-                    height: '20px',
-                    borderRadius: '50%',
-                    backgroundColor: c.hex,
-                    border: isSelected ? '2px solid var(--color-surface)' : '1px solid rgba(0,0,0,0.1)',
-                    boxShadow: isSelected ? `0 0 0 2px ${c.hex}` : 'none',
-                    cursor: 'pointer',
-                    transition: 'transform 0.1s ease',
-                    padding: 0,
                   }}
                 />
               );
             })}
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Styled Tag Input Box */}
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '4px',
-          background: 'var(--color-surface)',
-          border: '1px solid var(--color-border-strong)',
-          borderRadius: 'var(--radius-pill)',
-          padding: '2px 4px 2px 6px',
-          boxShadow: 'var(--shadow-sm)',
-          height: '26px',
-        }}
-      >
-        {/* Color Swatch Button */}
+      {listOpen ? (
+        <ul
+          id="tag-input-suggestions"
+          className="tag-input__suggestions"
+          role="listbox"
+          aria-label="Existing tags"
+        >
+          {suggestions.map((entry, index) => {
+            const style = getTagColorStyle(entry.tag, entry.color);
+            const active = index === highlightIndex;
+            return (
+              <li key={entry.tag} role="option" aria-selected={active}>
+                <button
+                  type="button"
+                  className={`tag-input__suggestion${active ? ' tag-input__suggestion--active' : ''}`}
+                  onMouseEnter={() => setHighlightIndex(index)}
+                  onClick={() => void pickSuggestion(entry)}
+                >
+                  <span
+                    className="tag-input__suggestion-dot"
+                    style={{ backgroundColor: style.hex }}
+                    aria-hidden="true"
+                  />
+                  <span className="tag-input__suggestion-label">{entry.tag}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      <form className="tag-input__form" onSubmit={(e) => void handleSubmit(e)}>
         <button
           type="button"
-          onClick={() => setShowColorPicker(!showColorPicker)}
+          className="tag-input__color-btn"
           title="Pick tag color"
-          style={{
-            width: '14px',
-            height: '14px',
-            borderRadius: '50%',
-            backgroundColor: selectedColor.hex,
-            border: 'none',
-            cursor: 'pointer',
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0,
+          style={{ backgroundColor: selectedColor.hex }}
+          onClick={() => {
+            setShowColorPicker((open) => !open);
+            setShowSuggestions(false);
           }}
         >
-          <Palette size={8} style={{ color: 'white', opacity: 0.8 }} />
+          <Palette size={8} />
         </button>
 
-        {/* Text Input */}
         <input
           ref={inputRef}
           type="text"
+          className="tag-input__field"
           value={tagName}
-          onChange={(e) => setTagName(e.target.value)}
           placeholder={placeholder}
           disabled={submitting}
-          style={{
-            border: 'none',
-            outline: 'none',
-            background: 'transparent',
-            fontSize: '11px',
-            color: 'var(--color-text)',
-            width: '75px',
-            padding: 0,
+          aria-autocomplete="list"
+          aria-expanded={listOpen}
+          aria-controls={listOpen ? 'tag-input-suggestions' : undefined}
+          onChange={(e) => {
+            setTagName(e.target.value);
+            setShowSuggestions(true);
+            setShowColorPicker(false);
           }}
+          onFocus={() => setShowSuggestions(true)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
-              if (showColorPicker) setShowColorPicker(false);
-              else onCancel?.();
+              e.preventDefault();
+              if (showColorPicker) {
+                setShowColorPicker(false);
+                return;
+              }
+              if (listOpen) {
+                setShowSuggestions(false);
+                return;
+              }
+              onCancel?.();
+              return;
+            }
+            if (!listOpen) return;
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              setHighlightIndex((index) => (index + 1) % suggestions.length);
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              setHighlightIndex((index) => (
+                index <= 0 ? suggestions.length - 1 : index - 1
+              ));
+            } else if (e.key === 'Enter' && suggestions.length > 0 && !tagName.trim()) {
+              // Empty query + Enter: pick highlighted existing tag.
+              e.preventDefault();
+              void pickSuggestion(suggestions[highlightIndex]!);
             }
           }}
         />
 
-        {/* Submit Action Button */}
         <button
           type="submit"
+          className="tag-input__add"
           disabled={submitting || !tagName.trim()}
-          style={{
-            border: 'none',
-            background: 'var(--color-primary)',
-            color: 'white',
-            borderRadius: 'var(--radius-pill)',
-            fontSize: '10px',
-            fontWeight: 'bold',
-            padding: '2px 8px',
-            height: '20px',
-            cursor: tagName.trim() && !submitting ? 'pointer' : 'default',
-            opacity: tagName.trim() && !submitting ? 1 : 0.5,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '2px',
-          }}
         >
           {submitting ? '…' : 'Add'}
         </button>
