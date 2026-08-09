@@ -1,7 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { Filter, X, Plus, ChevronRight, DollarSign, Send, CheckCircle2, Eye, MousePointer, MessageSquare, Tag, User as UserIcon } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Filter, X, Plus, ChevronRight, ChevronDown, DollarSign, Send, CheckCircle2,
+  Eye, MousePointer, MessageSquare, Tag, User as UserIcon, Check,
+} from 'lucide-react';
 import { TagBadge } from '@/app/components/tag-badge';
 import { TagInputPopover } from '@/app/components/tag-input-popover';
 import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
@@ -57,6 +60,8 @@ export function AnalyticsHub() {
 
   // Inline Tagging state for Campaign Matrix
   const [editingTagCampaignId, setEditingTagCampaignId] = useState<string | null>(null);
+  const [campaignMenuOpen, setCampaignMenuOpen] = useState(false);
+  const campaignFilterRef = useRef<HTMLDivElement>(null);
 
   const summaryEnabled = period !== 'custom' || (Boolean(customFrom) && Boolean(customTo));
 
@@ -102,11 +107,38 @@ export function AnalyticsHub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, customFrom, customTo, selectedCampaignIds, selectedTags, selectedUserId]);
 
+  // Load runs after the summary settles so we don't open two heavy queries
+  // at once against the session pooler.
   useEffect(() => {
+    if (!summary) return;
+    let cancelled = false;
     void hubGetJson<{ runs: RunRow[] }>('/api/analytics/runs')
-      .then((runsData) => setRuns(runsData.runs))
+      .then((runsData) => {
+        if (!cancelled) setRuns(runsData.runs);
+      })
       .catch(() => undefined);
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [summary]);
+
+  useEffect(() => {
+    if (!campaignMenuOpen) return;
+    function onPointerDown(event: MouseEvent) {
+      if (!campaignFilterRef.current?.contains(event.target as Node)) {
+        setCampaignMenuOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setCampaignMenuOpen(false);
+    }
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [campaignMenuOpen]);
 
   const selectedExcluded = useMemo(
     () => [...selectedExclusions].every((id) => runs.find((r) => r.id === id)?.excluded),
@@ -212,6 +244,21 @@ export function AnalyticsHub() {
 
   const metrics = summary?.aggregate;
 
+  const campaignTriggerLabel = useMemo(() => {
+    if (selectedCampaignIds.length === 0) return 'All campaigns';
+    if (selectedCampaignIds.length === 1) {
+      const match = summary?.available_campaigns?.find((c) => c.id === selectedCampaignIds[0]);
+      return match?.name ?? '1 campaign';
+    }
+    return `${selectedCampaignIds.length} campaigns`;
+  }, [selectedCampaignIds, summary?.available_campaigns]);
+
+  const userTriggerLabel = useMemo(() => {
+    if (!selectedUserId) return 'All users';
+    const match = summary?.available_users?.find((u) => u.id === selectedUserId);
+    return match?.name || match?.email || 'Selected user';
+  }, [selectedUserId, summary?.available_users]);
+
   if (loading && !summary) {
     return <HubLoadingSpinner label="Loading analytics" />;
   }
@@ -294,52 +341,79 @@ export function AnalyticsHub() {
 
               {/* User Filter */}
               {summary?.available_users?.length ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-subtle)', fontWeight: 'bold' }}>User Owner</span>
-                  <select
-                    className="field__input"
-                    style={{ height: '32px', padding: '0 8px', fontSize: 'var(--font-size-xs)', minWidth: '150px' }}
-                    value={selectedUserId}
-                    onChange={(e) => setSelectedUserId(e.target.value)}
-                  >
-                    <option value="">All Users</option>
-                    {summary.available_users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name || u.email}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <label className="analytics-filter">
+                  <span className="analytics-filter__label">User Owner</span>
+                  <span className={`analytics-filter__shell${selectedUserId ? ' analytics-filter__shell--active' : ''}`}>
+                    <select
+                      className="analytics-filter__select"
+                      value={selectedUserId}
+                      onChange={(e) => setSelectedUserId(e.target.value)}
+                      aria-label="User owner"
+                    >
+                      <option value="">All users</option>
+                      {summary.available_users.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name || u.email}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="analytics-filter__value" aria-hidden="true">
+                      {userTriggerLabel}
+                    </span>
+                    <ChevronDown size={14} className="analytics-filter__chevron" aria-hidden="true" />
+                  </span>
+                </label>
               ) : null}
 
               {/* Campaign Multiselect Filter */}
               {summary?.available_campaigns?.length ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: '200px' }}>
-                  <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-subtle)', fontWeight: 'bold' }}>Campaigns</span>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: '64px', overflowY: 'auto' }}>
-                    {summary.available_campaigns.map((c) => {
-                      const isSelected = selectedCampaignIds.includes(c.id);
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => toggleCampaignFilter(c.id)}
-                          style={{
-                            border: '1px solid var(--color-border)',
-                            background: isSelected ? 'var(--color-primary-soft)' : 'var(--color-surface)',
-                            color: isSelected ? 'var(--color-primary)' : 'var(--color-text-muted)',
-                            fontWeight: isSelected ? 'bold' : 'normal',
-                            borderRadius: 'var(--radius-pill)',
-                            padding: '2px 8px',
-                            fontSize: '11px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {isSelected ? '✓ ' : ''}{c.name}
-                        </button>
-                      );
-                    })}
-                  </div>
+                <div className="analytics-filter analytics-filter--menu" ref={campaignFilterRef}>
+                  <span className="analytics-filter__label">Campaigns</span>
+                  <button
+                    type="button"
+                    className={`analytics-filter__shell analytics-filter__trigger${
+                      selectedCampaignIds.length ? ' analytics-filter__shell--active' : ''
+                    }${campaignMenuOpen ? ' analytics-filter__shell--open' : ''}`}
+                    aria-haspopup="listbox"
+                    aria-expanded={campaignMenuOpen}
+                    onClick={() => setCampaignMenuOpen((open) => !open)}
+                  >
+                    <span className="analytics-filter__value">{campaignTriggerLabel}</span>
+                    <ChevronDown size={14} className="analytics-filter__chevron" aria-hidden="true" />
+                  </button>
+                  {campaignMenuOpen ? (
+                    <div className="analytics-filter__menu" role="listbox" aria-multiselectable="true">
+                      <button
+                        type="button"
+                        className={`analytics-filter__option${
+                          selectedCampaignIds.length === 0 ? ' analytics-filter__option--active' : ''
+                        }`}
+                        onClick={() => setSelectedCampaignIds([])}
+                      >
+                        <span>All campaigns</span>
+                        {selectedCampaignIds.length === 0 ? <Check size={14} aria-hidden="true" /> : null}
+                      </button>
+                      <div className="analytics-filter__menu-divider" />
+                      {summary.available_campaigns.map((c) => {
+                        const isSelected = selectedCampaignIds.includes(c.id);
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            role="option"
+                            aria-selected={isSelected}
+                            className={`analytics-filter__option${
+                              isSelected ? ' analytics-filter__option--active' : ''
+                            }`}
+                            onClick={() => toggleCampaignFilter(c.id)}
+                          >
+                            <span>{c.name}</span>
+                            {isSelected ? <Check size={14} aria-hidden="true" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>

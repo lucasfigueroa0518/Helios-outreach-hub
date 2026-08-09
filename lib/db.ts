@@ -29,11 +29,20 @@ function connectionString(): string {
 }
 
 function poolMax(): number {
-  // Next + worker each open a pool. Keep per-process max small so both fit
-  // under Supabase session pool_size (~15) with headroom for one-off scripts.
-  const parsed = Number(process.env.PG_POOL_MAX ?? 4);
-  if (!Number.isFinite(parsed)) return 4;
+  // Next + worker each open a pool. Default 2 so both fit under Supabase
+  // session pool_size (~15) with headroom for psql/scripts/HMR leftovers.
+  const parsed = Number(process.env.PG_POOL_MAX ?? 2);
+  if (!Number.isFinite(parsed)) return 2;
   return Math.max(1, Math.min(8, Math.floor(parsed)));
+}
+
+function isPoolExhaustedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /EMAXCONNSESSION|max clients reached|remaining connection slots/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getPool(): Pool {
@@ -42,7 +51,7 @@ function getPool(): Pool {
       connectionString: connectionString(),
       ssl: process.platform === 'win32' ? false : { rejectUnauthorized: false },
       max: poolMax(),
-      idleTimeoutMillis: 20_000,
+      idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 15_000,
       allowExitOnIdle: true,
     });
@@ -54,23 +63,46 @@ export async function dbQuery<T extends QueryResultRow = QueryResultRow>(
   text: string,
   params?: unknown[],
 ): Promise<QueryResult<T>> {
-  return getPool().query<T>(text, params);
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await getPool().query<T>(text, params);
+    } catch (error) {
+      lastError = error;
+      if (!isPoolExhaustedError(error) || attempt === maxAttempts) throw error;
+      // Brief backoff so idle clients can return to the Supabase session pool.
+      await sleep(150 * attempt);
+    }
+  }
+  throw lastError;
 }
 
 /** Run related writes atomically. Roll back automatically when the callback throws. */
 export async function dbTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await getPool().connect();
-  try {
-    await client.query('BEGIN');
-    const result = await callback(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const client = await getPool().connect();
+      try {
+        await client.query('BEGIN');
+        const result = await callback(client);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      lastError = error;
+      if (!isPoolExhaustedError(error) || attempt === maxAttempts) throw error;
+      await sleep(150 * attempt);
+    }
   }
+  throw lastError;
 }
 
 /** Drain the shared pool (tests / graceful worker shutdown). */

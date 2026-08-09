@@ -9,7 +9,7 @@ import {
   useState,
 } from 'react';
 
-import { HUB_PREFETCH_URLS, prefetchHubJson } from '@/app/hub/hub-data';
+import { HUB_TAB_PREFETCH, prefetchHubJson } from '@/app/hub/hub-data';
 
 const TABS = [
   { id: 'campaigns', label: 'Campaigns', href: '/hub' },
@@ -27,6 +27,13 @@ function tabIdFromPath(pathname: string): TabId {
   return 'campaigns';
 }
 
+function prefetchTab(tab: (typeof TABS)[number], router: ReturnType<typeof useRouter>) {
+  router.prefetch(tab.href);
+  for (const url of HUB_TAB_PREFETCH[tab.id] ?? []) {
+    prefetchHubJson(url);
+  }
+}
+
 export function HubNav() {
   const pathname = usePathname() || '/hub';
   const router = useRouter();
@@ -40,9 +47,10 @@ export function HubNav() {
     setActiveId(routeTab);
   }, [routeTab]);
 
+  // Prefetch RSC routes only on mount — do NOT fan out all hub API calls
+  // (that was exhausting Supabase session pool_size ≈ 15).
   useEffect(() => {
     for (const tab of TABS) router.prefetch(tab.href);
-    for (const url of HUB_PREFETCH_URLS) prefetchHubJson(url);
   }, [router]);
 
   const measure = useCallback(() => {
@@ -107,8 +115,8 @@ export function HubNav() {
               ref={(node) => {
                 itemRefs.current[index] = node;
               }}
-              onMouseEnter={() => router.prefetch(tab.href)}
-              onFocus={() => router.prefetch(tab.href)}
+              onMouseEnter={() => prefetchTab(tab, router)}
+              onFocus={() => prefetchTab(tab, router)}
               onClick={() => goTo(tab)}
             >
               {tab.label}

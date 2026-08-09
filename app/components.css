@@ -3482,6 +3482,149 @@ a.segmented__item { text-decoration: none; }
 
 /* Analytics Hub */
 .analytics-hub { display: flex; flex-direction: column; gap: var(--space-4); }
+
+/* Compact filter dropdowns (User Owner / Campaigns) */
+.analytics-filter {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 11.5rem;
+}
+.analytics-filter--menu { min-width: 13.5rem; }
+.analytics-filter__label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-subtle);
+  letter-spacing: var(--letter-spacing-label);
+}
+.analytics-filter__shell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background var(--transition-fast);
+}
+.analytics-filter__shell:hover {
+  border-color: var(--color-border-strong);
+}
+.analytics-filter__shell--active {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--color-surface));
+  color: var(--color-primary);
+}
+.analytics-filter__shell--open {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+.analytics-filter__trigger {
+  width: 100%;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.analytics-filter__select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+  border: none;
+  background: none;
+}
+.analytics-filter__value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.analytics-filter__chevron {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  pointer-events: none;
+  transition: transform var(--transition-fast);
+}
+.analytics-filter__shell--open .analytics-filter__chevron,
+.analytics-filter__shell:focus-within .analytics-filter__chevron {
+  color: var(--color-primary);
+}
+.analytics-filter__shell--open .analytics-filter__chevron {
+  transform: rotate(180deg);
+}
+.analytics-filter__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-sticky);
+  min-width: 100%;
+  width: max-content;
+  max-width: min(22rem, 80vw);
+  max-height: 16rem;
+  overflow: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  animation: analytics-filter-in var(--transition-fast);
+}
+.analytics-filter__menu-divider {
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--color-border);
+}
+.analytics-filter__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 7px var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.analytics-filter__option:hover {
+  background: var(--color-surface-2);
+}
+.analytics-filter__option--active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+}
+.analytics-filter__option svg {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+@keyframes analytics-filter-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .analytics-filter__menu { animation: none; }
+}
+
 .analytics-hub__acl-note {
   margin: 0;
   padding: var(--space-3);

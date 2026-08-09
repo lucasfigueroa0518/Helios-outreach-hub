@@ -28,6 +28,7 @@ export async function hubGetJson<T>(url: string, options?: { force?: boolean }):
   return request;
 }
 
+/** Prefetch a single hub API; never fan out many session-pool connections at once. */
 export function prefetchHubJson(url: string): void {
   void hubGetJson(url).catch(() => undefined);
 }
@@ -42,10 +43,9 @@ export function invalidateHubCache(prefix?: string): void {
   }
 }
 
-export const HUB_PREFETCH_URLS = [
-  '/api/campaigns',
-  '/api/send-queue',
-  '/api/conversations',
-  '/api/analytics/summary?period=week',
-  '/api/analytics/runs',
-] as const;
+export const HUB_TAB_PREFETCH: Record<string, string[]> = {
+  campaigns: ['/api/campaigns'],
+  queue: ['/api/send-queue'],
+  analytics: ['/api/analytics/summary?period=week'],
+  conversations: ['/api/conversations'],
+};
