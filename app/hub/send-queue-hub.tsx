@@ -1,9 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { CalendarClock, Send, Trash2, RotateCcw, X } from 'lucide-react';
 
+import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
+import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { requestJson } from '@/lib/client-request';
 import { formatNyDateLabel } from '@/lib/drafting/send-queue-schedule';
 import type { QueueDayBucket, QueueListItem } from '@/lib/drafting/send-queue';
@@ -34,17 +36,18 @@ export function SendQueueHub() {
   const [dragIds, setDragIds] = useState<string[] | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detail, setDetail] = useState<QueueDetailResponse | null>(null);
+  const hasDataRef = useRef(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (force = false) => {
+    if (!hasDataRef.current) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (campaignId) params.set('campaign_id', campaignId);
       const qs = params.toString();
-      const result = await requestJson<QueueListResponse>(
-        `/api/send-queue${qs ? `?${qs}` : ''}`,
-      );
+      const url = `/api/send-queue${qs ? `?${qs}` : ''}`;
+      const result = await hubGetJson<QueueListResponse>(url, { force });
       setData(result);
+      hasDataRef.current = true;
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load send queue');
@@ -58,7 +61,7 @@ export function SendQueueHub() {
   }, [load]);
 
   useEffect(() => {
-    void requestJson<{ campaigns: CampaignOption[] }>('/api/campaigns')
+    void hubGetJson<{ campaigns: CampaignOption[] }>('/api/campaigns')
       .then((res) => setCampaigns(res.campaigns.map((c) => ({ id: c.id, name: c.name }))))
       .catch(() => setCampaigns([]));
   }, []);
@@ -129,7 +132,8 @@ export function SendQueueHub() {
     try {
       await action();
       setSelected(new Set());
-      await load();
+      invalidateHubCache('/api/send-queue');
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Action failed');
     } finally {
@@ -164,6 +168,10 @@ export function SendQueueHub() {
 
   const backlogCount = data?.days.reduce((sum, day) => sum + day.queued_count, 0) ?? 0;
 
+  if (loading && !data) {
+    return <HubLoadingSpinner label="Loading queue" />;
+  }
+
   return (
     <main className="app-shell">
       <section className="card">
@@ -173,10 +181,6 @@ export function SendQueueHub() {
             <div className="card__subtitle">
               20 emails/day · America/New_York · drag to move by day
             </div>
-          </div>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <Link href="/hub" className="btn btn--secondary">Campaigns</Link>
-            <Link href="/hub/analytics" className="btn btn--secondary">Analytics Hub</Link>
           </div>
         </div>
         <div className="card__body">
@@ -255,7 +259,6 @@ export function SendQueueHub() {
 
           {error && <p className="field__error">{error}</p>}
           {message && <p className="field__notice">{message}</p>}
-          {loading && !data ? <p className="muted">Loading queue…</p> : null}
 
           {!loading && data && backlogCount === 0 && data.days.every((d) => d.items.length === 0) ? (
             <p className="send-queue-empty">

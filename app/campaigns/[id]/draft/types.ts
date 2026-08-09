@@ -38,6 +38,7 @@ export type DraftingItemRow = {
     send_status: 'unsent' | 'queued' | 'sending' | 'sent' | 'failed';
     queue_id: string | null;
     schedule_date: string | null;
+    email_send_id: string | null;
     sent_at: string | null;
     send_error: string | null;
     engagement:

@@ -217,9 +217,14 @@ export function buildSignatureHtml(signature: EmailSignatureFields): string {
 </table>`.trim();
 }
 
-export function buildOutreachEmailHtml(bodyText: string, signature: EmailSignatureFields): string {
+export function buildOutreachEmailHtml(
+  bodyText: string,
+  signature: EmailSignatureFields,
+  options: { bodyToHtml?: (text: string) => string } = {},
+): string {
   const cleaned = stripTrailingTextSignature(bodyText, signature);
-  const bodyHtml = plainTextBodyToHtml(cleaned);
+  const toHtml = options.bodyToHtml ?? plainTextBodyToHtml;
+  const bodyHtml = toHtml(cleaned);
   const signatureHtml = buildSignatureHtml(signature);
   return `<!DOCTYPE html>
 <html>

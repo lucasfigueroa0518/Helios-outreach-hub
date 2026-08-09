@@ -2054,6 +2054,106 @@ a.segmented__item { text-decoration: none; }
   }
 }
 
+/* ---- Hub top nav (sliding segmented control) ------------------------------- */
+.hub-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.hub-shell > .app-shell {
+  padding-top: var(--space-3);
+}
+.hub-shell > .hub-loading-shell {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+}
+.hub-nav-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: var(--space-4) var(--space-5) var(--space-2);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+/* ---- Hub page loading spinner ---------------------------------------------- */
+.hub-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hub-loading__spinner {
+  width: 40px;
+  height: 40px;
+  border-width: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hub-loading__spinner { animation: none; border-top-color: var(--color-border-strong); }
+}
+
+.hub-nav {
+  position: relative;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.hub-nav::-webkit-scrollbar { display: none; }
+.hub-nav__thumb {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  bottom: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+}
+.hub-nav__thumb--ready {
+  opacity: 1;
+  transition:
+    transform 260ms cubic-bezier(0.16, 1, 0.3, 1),
+    width 260ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity var(--transition-fast);
+}
+.hub-nav__item {
+  position: relative;
+  z-index: 1;
+  border: none;
+  background: none;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast);
+}
+.hub-nav__item--active {
+  color: var(--color-text-inverse);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hub-nav__thumb--ready {
+    transition: none;
+  }
+}
+@media (max-width: 520px) {
+  .hub-nav__item { padding: 5px 10px; }
+}
+
 .campaign-tabs-row {
   display: flex;
   align-items: center;

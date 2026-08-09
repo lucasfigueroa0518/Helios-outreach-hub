@@ -462,6 +462,34 @@ async function handleDraftingJob(
   };
 }
 
+async function handleReplyRespond(
+  job: OrchestrationJob<'reply.respond'>,
+): Promise<WorkHandlerResult> {
+  const { processReplyRespond } = await import('@/lib/drafting/reply-pipeline');
+  const result = await processReplyRespond(job.payload.replySendId);
+  if (result.status === 'not_ready') {
+    throw new RetryableWorkError('reply_respond_not_ready', 15_000, 'reply_respond_not_ready');
+  }
+  if (result.status === 'failed') {
+    return { result: { ...result, ok: false } };
+  }
+  return { result: { ...result, ok: true } };
+}
+
+async function handleReplyFollowup(
+  job: OrchestrationJob<'reply.followup'>,
+): Promise<WorkHandlerResult> {
+  const { processReplyFollowup } = await import('@/lib/drafting/reply-pipeline');
+  const result = await processReplyFollowup(job.payload.replySendId);
+  if (result.status === 'not_ready') {
+    throw new RetryableWorkError('reply_followup_not_ready', 60_000, 'reply_followup_not_ready');
+  }
+  if (result.status === 'failed') {
+    return { result: { ...result, ok: false } };
+  }
+  return { result: { ...result, ok: true } };
+}
+
 async function handleEmailSend(
   job: OrchestrationJob<'email.send'>,
 ): Promise<WorkHandlerResult> {
@@ -700,6 +728,8 @@ const HANDLERS: Record<WorkKind, Handler> = {
   'drafting.job.process': handleDraftingJob as Handler,
   'drafting.job.write': handleDraftingJob as Handler,
   'email.send': handleEmailSend as Handler,
+  'reply.respond': handleReplyRespond as Handler,
+  'reply.followup': handleReplyFollowup as Handler,
   'system.reconcile': handleReconcile as Handler,
 };
 

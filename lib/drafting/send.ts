@@ -13,6 +13,7 @@ import {
   SIGNATURE_HEADSHOT_CID,
   type EmailSignatureFields,
 } from '@/lib/drafting/email-signature';
+import { replyPlainTextBodyToHtml } from '@/lib/drafting/reply-linkify';
 import {
   EmailSendConfigurationError,
   EmailSendProviderError,
@@ -35,6 +36,10 @@ export type SendEmailInput = {
   companyName?: string | null;
   senderProfileId?: string | null;
   headshotStoragePath?: string | null;
+  /** Extra MIME headers (e.g. In-Reply-To / References for threaded replies). */
+  headers?: Record<string, string>;
+  /** When true, hyperlink heliosgroup.ai + Calendly in the HTML body. */
+  linkifyReplyBody?: boolean;
 };
 
 /**
@@ -66,10 +71,20 @@ export function resendReplyDomain(): string {
   return (process.env.RESEND_REPLY_DOMAIN?.trim() || 'replies.heliosgroup.ai').toLowerCase();
 }
 
-/** Plus-address used as Reply-To so inbound replies map to a drafting item. */
+/**
+ * Reply-To plus-address for outbound outreach.
+ * Prospect replies land in Resend inbound (reply+{itemId}@RESEND_REPLY_DOMAIN)
+ * so the auto-response worker can draft and send.
+ */
 export function replyToAddressForItem(itemId: string): string {
   const clean = itemId.trim().toLowerCase();
   return `reply+${clean}@${resendReplyDomain()}`;
+}
+
+/** @deprecated Prefer {@link replyToAddressForItem}; kept for tests/legacy callers. */
+export function outboundReplyToAddress(fromEmail: string): string | undefined {
+  const email = fromEmail.trim();
+  return email || undefined;
 }
 
 export function parseReplyPlusItemId(
@@ -224,15 +239,21 @@ export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmai
     signature.headshotUrl = null;
   }
   const text = appendPlainTextSignature(bodyText, signature);
-  const html = buildOutreachEmailHtml(bodyText, signature);
+  const html = buildOutreachEmailHtml(
+    bodyText,
+    signature,
+    input.linkifyReplyBody ? { bodyToHtml: replyPlainTextBodyToHtml } : undefined,
+  );
 
   const tags: Array<{ name: string; value: string }> = [];
   if (input.itemId?.trim()) tags.push({ name: 'item_id', value: input.itemId.trim() });
   if (input.campaignId?.trim()) tags.push({ name: 'campaign_id', value: input.campaignId.trim() });
 
-  const replyTo = input.itemId?.trim()
-    ? replyToAddressForItem(input.itemId)
-    : (input.fromEmail.trim() || undefined);
+  const itemId = input.itemId?.trim();
+  const replyTo = itemId ? replyToAddressForItem(itemId) : outboundReplyToAddress(input.fromEmail);
+  const headers = input.headers && Object.keys(input.headers).length > 0
+    ? input.headers
+    : undefined;
 
   const client = createResendClient();
   const response = await client.emails.send({
@@ -241,7 +262,8 @@ export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmai
     subject,
     text,
     html,
-    replyTo: replyTo || undefined,
+    replyTo,
+    headers,
     tags: tags.length > 0 ? tags : undefined,
     attachments: headshot
       ? [{

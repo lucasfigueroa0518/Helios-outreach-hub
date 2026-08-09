@@ -7,6 +7,8 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { HubPlaneFlight } from '@/app/components/plane-flight';
 import { BillingGuardAlert } from '@/app/hub/billing-guard-alert';
+import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
+import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { LeadListTutorial } from '@/app/hub/lead-list-tutorial';
 
 import { requestJson } from '@/lib/client-request';
@@ -50,10 +52,10 @@ export function CampaignHub({ email }: { email: string }) {
   const active = useMemo(() => campaigns.filter((campaign) => campaign.status === 'active'), [campaigns]);
   const archived = useMemo(() => campaigns.filter((campaign) => campaign.status === 'archived'), [campaigns]);
 
-  async function loadCampaigns() {
-    setLoading(true);
+  async function loadCampaigns(force = false) {
+    if (campaigns.length === 0) setLoading(true);
     try {
-      const data = await requestJson<{ campaigns: Campaign[] }>('/api/campaigns');
+      const data = await hubGetJson<{ campaigns: Campaign[] }>('/api/campaigns', { force });
       setCampaigns(data.campaigns);
       setError(null);
     } catch (err) {
@@ -95,6 +97,7 @@ export function CampaignHub({ email }: { email: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, needs_enrichment: needsEnrichment }),
       });
+      invalidateHubCache('/api/campaigns');
       setDialog(null);
       router.push(`/campaigns/${data.campaign.id}`);
     } catch (err) {
@@ -114,8 +117,9 @@ export function CampaignHub({ email }: { email: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       });
+      invalidateHubCache('/api/campaigns');
       setDialog(null);
-      await loadCampaigns();
+      await loadCampaigns(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to rename campaign');
     } finally {
@@ -131,7 +135,8 @@ export function CampaignHub({ email }: { email: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'archived' }),
       });
-      await loadCampaigns();
+      invalidateHubCache('/api/campaigns');
+      await loadCampaigns(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to archive campaign');
     }
@@ -147,13 +152,23 @@ export function CampaignHub({ email }: { email: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source_campaign_id: sourceId }),
       });
+      invalidateHubCache('/api/campaigns');
       setDialog(null);
-      await loadCampaigns();
+      await loadCampaigns(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to merge campaigns');
     } finally {
       setSaving(false);
     }
+  }
+
+  if (loading && campaigns.length === 0) {
+    return (
+      <>
+        <BillingGuardAlert />
+        <HubLoadingSpinner label="Loading campaigns" />
+      </>
+    );
   }
 
   return (
@@ -191,20 +206,12 @@ export function CampaignHub({ email }: { email: string }) {
             </div>
             <LeadListTutorial />
           </section>
-          {loading ? (
-            <p className="text-muted">Loading campaigns…</p>
-          ) : active.length === 0 ? (
+          {active.length === 0 ? (
             <div className="empty-state">
               <strong>Create your first campaign</strong>
               <span>Keep each outreach list organized in its own workspace, then add your lead sources.</span>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button className="btn btn--primary" onClick={openCreate}>+ New Campaign</button>
-                <Link href="/hub/queue" className="btn btn--secondary">
-                  Queue
-                </Link>
-                <Link href="/hub/analytics" className="btn btn--secondary">
-                  Analytics Hub
-                </Link>
               </div>
             </div>
           ) : (
@@ -213,12 +220,6 @@ export function CampaignHub({ email }: { email: string }) {
                 <button className="btn btn--primary hub-campaigns__create" type="button" onClick={openCreate}>
                   + New Campaign
                 </button>
-                <Link href="/hub/queue" className="btn btn--secondary">
-                  Queue
-                </Link>
-                <Link href="/hub/analytics" className="btn btn--secondary">
-                  Analytics Hub
-                </Link>
               </div>
               <div className="hub-campaigns__header">
                 <strong>Your campaigns</strong>
@@ -233,7 +234,7 @@ export function CampaignHub({ email }: { email: string }) {
                     onRename={() => openRename(campaign)}
                     onMerge={() => openMerge(campaign)}
                     onArchive={() => void archiveCampaign(campaign)}
-                    onReload={() => void loadCampaigns()}
+                    onReload={() => void loadCampaigns(true)}
                   />
                 ))}
               </div>
@@ -252,7 +253,7 @@ export function CampaignHub({ email }: { email: string }) {
                     onRename={() => openRename(campaign)}
                     onMerge={() => undefined}
                     onArchive={() => undefined}
-                    onReload={() => void loadCampaigns()}
+                    onReload={() => void loadCampaigns(true)}
                   />
                 ))}
               </div>

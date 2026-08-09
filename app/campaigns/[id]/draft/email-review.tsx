@@ -842,30 +842,36 @@ export function EmailReview({
               </Link>
             ) : null}
             {alreadySent || current.draft.send_status === 'failed' ? (
-              <span
-                className={`drafting-status-chip ${
-                  current.draft.engagement === 'bounced'
-                  || current.draft.engagement === 'complained'
-                  || current.draft.engagement === 'failed'
-                    ? 'drafting-status-chip--failed'
-                    : current.draft.engagement === 'replied'
-                      || current.draft.engagement === 'opened'
-                      || current.draft.engagement === 'clicked'
-                      || current.draft.engagement === 'delivered'
-                      ? 'drafting-status-chip--approved'
-                      : current.draft.engagement === 'sent'
-                        ? 'drafting-status-chip--ready'
-                        : 'drafting-status-chip--attention'
-                }`}
-                title={
-                  current.draft.open_count > 0 || current.draft.click_count > 0
-                    ? `${current.draft.open_count} open${current.draft.open_count === 1 ? '' : 's'} · ${current.draft.click_count} click${current.draft.click_count === 1 ? '' : 's'}`
-                    : undefined
-                }
-              >
-                {current.draft.engagement === 'replied'
-                  ? 'Replied'
-                  : current.draft.engagement === 'clicked'
+              current.draft.engagement === 'replied' && current.draft.email_send_id ? (
+                <Link
+                  href={`/hub/conversations?thread=${current.draft.email_send_id}`}
+                  className="drafting-status-chip drafting-status-chip--approved"
+                  title="Open conversation"
+                >
+                  Replied
+                </Link>
+              ) : (
+                <span
+                  className={`drafting-status-chip ${
+                    current.draft.engagement === 'bounced'
+                    || current.draft.engagement === 'complained'
+                    || current.draft.engagement === 'failed'
+                      ? 'drafting-status-chip--failed'
+                      : current.draft.engagement === 'opened'
+                        || current.draft.engagement === 'clicked'
+                        || current.draft.engagement === 'delivered'
+                        ? 'drafting-status-chip--approved'
+                        : current.draft.engagement === 'sent'
+                          ? 'drafting-status-chip--ready'
+                          : 'drafting-status-chip--attention'
+                  }`}
+                  title={
+                    current.draft.open_count > 0 || current.draft.click_count > 0
+                      ? `${current.draft.open_count} open${current.draft.open_count === 1 ? '' : 's'} · ${current.draft.click_count} click${current.draft.click_count === 1 ? '' : 's'}`
+                      : undefined
+                  }
+                >
+                  {current.draft.engagement === 'clicked'
                     ? 'Clicked'
                     : current.draft.engagement === 'opened'
                       ? 'Opened'
@@ -877,8 +883,11 @@ export function EmailReview({
                             ? 'Complained'
                             : current.draft.engagement === 'failed'
                               ? 'Send failed'
-                              : 'Sent'}
-              </span>
+                              : current.draft.engagement === 'replied'
+                                ? 'Replied'
+                                : 'Sent'}
+                </span>
+              )
             ) : null}
             {rewriting ? (
               <span className="drafting-rewrite-spinner loading-spinner" aria-hidden="true" />

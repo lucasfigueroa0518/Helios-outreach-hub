@@ -303,6 +303,7 @@ export async function applyResendWebhookEvent(
       return { handled: true, sendId: send.id, reason: 'duplicate' };
     }
     const processed = JSON.stringify(nextProcessedWebhookIds(send.processed_webhook_ids, svixId));
+    const providerEmailId = asString(data.email_id);
     await dbQuery(
       `UPDATE outreach.email_sends
           SET replied_at = coalesce(replied_at, $2::timestamptz),
@@ -311,9 +312,34 @@ export async function applyResendWebhookEvent(
               processed_webhook_ids = $4::jsonb,
               updated_at = now()
         WHERE id = $1`,
-      [send.id, eventAt, asString(data.email_id), processed],
+      [send.id, eventAt, providerEmailId, processed],
     );
-    return { handled: true, sendId: send.id };
+
+    try {
+      const { processInboundLeadReply } = await import('@/lib/drafting/reply-inbound');
+      const inboundResult = await processInboundLeadReply({
+        emailSendId: send.id,
+        providerEmailId,
+        eventAt,
+      });
+      return {
+        handled: true,
+        sendId: send.id,
+        reason: inboundResult.skipped
+          ?? (inboundResult.replySendId ? 'reply_queued' : 'inbound_stored'),
+      };
+    } catch (error) {
+      // Engagement stamp already committed; do not fail the webhook hard.
+      console.error(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'error',
+        component: 'resend-engagement',
+        message: 'inbound_reply_pipeline_failed',
+        sendId: send.id,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      return { handled: true, sendId: send.id, reason: 'inbound_pipeline_error' };
+    }
   }
 
   const outboundTypes = new Set([

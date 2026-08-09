@@ -1,10 +1,11 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { Filter, X, Plus, ChevronRight, DollarSign, Send, CheckCircle2, Eye, MousePointer, MessageSquare, Tag, User as UserIcon } from 'lucide-react';
 import { TagBadge } from '@/app/components/tag-badge';
 import { TagInputPopover } from '@/app/components/tag-input-popover';
+import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
+import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { requestJson } from '@/lib/client-request';
 import { AnalyticsSummary, AnalyticsCampaignRow } from '@/lib/analytics';
 import { AnalyticsDrilldownDrawer } from '@/app/hub/analytics-drilldown-drawer';
@@ -65,9 +66,9 @@ export function AnalyticsHub() {
     (selectedUserId ? 1 : 0) +
     (period === 'custom' ? 1 : 0);
 
-  async function load() {
+  async function loadSummary() {
     if (!summaryEnabled) return;
-    setLoading(true);
+    if (!summary) setLoading(true);
     try {
       const params = new URLSearchParams({ period });
       if (period === 'custom') {
@@ -84,12 +85,10 @@ export function AnalyticsHub() {
         params.set('userId', selectedUserId);
       }
 
-      const [summaryData, runsData] = await Promise.all([
-        requestJson<AnalyticsSummary>(`/api/analytics/summary?${params.toString()}`),
-        requestJson<{ runs: RunRow[] }>('/api/analytics/runs'),
-      ]);
+      const summaryData = await hubGetJson<AnalyticsSummary>(
+        `/api/analytics/summary?${params.toString()}`,
+      );
       setSummary(summaryData);
-      setRuns(runsData.runs);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load analytics');
@@ -99,9 +98,15 @@ export function AnalyticsHub() {
   }
 
   useEffect(() => {
-    void load();
+    void loadSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, customFrom, customTo, selectedCampaignIds, selectedTags, selectedUserId]);
+
+  useEffect(() => {
+    void hubGetJson<{ runs: RunRow[] }>('/api/analytics/runs')
+      .then((runsData) => setRuns(runsData.runs))
+      .catch(() => undefined);
+  }, []);
 
   const selectedExcluded = useMemo(
     () => [...selectedExclusions].every((id) => runs.find((r) => r.id === id)?.excluded),
@@ -126,7 +131,10 @@ export function AnalyticsHub() {
         body: JSON.stringify({ runIds: [...selectedExclusions] }),
       });
       setSelectedExclusions(new Set());
-      await load();
+      invalidateHubCache('/api/analytics');
+      const runsData = await hubGetJson<{ runs: RunRow[] }>('/api/analytics/runs', { force: true });
+      setRuns(runsData.runs);
+      await loadSummary();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to exclude runs');
     } finally {
@@ -143,7 +151,10 @@ export function AnalyticsHub() {
         body: JSON.stringify({ runIds: [...selectedExclusions] }),
       });
       setSelectedExclusions(new Set());
-      await load();
+      invalidateHubCache('/api/analytics');
+      const runsData = await hubGetJson<{ runs: RunRow[] }>('/api/analytics/runs', { force: true });
+      setRuns(runsData.runs);
+      await loadSummary();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to include runs');
     } finally {
@@ -180,7 +191,8 @@ export function AnalyticsHub() {
         body: JSON.stringify({ tag: tagName, color: colorId }),
       });
       setEditingTagCampaignId(null);
-      await load();
+      invalidateHubCache('/api/analytics');
+      await loadSummary();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to add tag');
     }
@@ -191,13 +203,18 @@ export function AnalyticsHub() {
       await requestJson(`/api/campaigns/${campaignId}/tags?tag=${encodeURIComponent(tag)}`, {
         method: 'DELETE',
       });
-      await load();
+      invalidateHubCache('/api/analytics');
+      await loadSummary();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to remove tag');
     }
   }
 
   const metrics = summary?.aggregate;
+
+  if (loading && !summary) {
+    return <HubLoadingSpinner label="Loading analytics" />;
+  }
 
   return (
     <main className="app-shell">
@@ -207,7 +224,6 @@ export function AnalyticsHub() {
             <div className="card__title">Analytics Hub</div>
             <div className="card__subtitle">Cold outreach campaign spend & conversion actuals</div>
           </div>
-          <Link href="/hub" className="btn btn--secondary">← Outreach Hub</Link>
         </div>
 
         <div className="card__body analytics-hub">
@@ -352,9 +368,7 @@ export function AnalyticsHub() {
             ) : null}
           </section>
 
-          {loading && <p className="text-muted">Loading analytics…</p>}
-
-          {!loading && metrics && (
+          {metrics && (
             <>
               {/* ──────────────── 2. Spend Analytics Section ──────────────── */}
               <section style={{ marginBottom: 'var(--space-6)' }}>

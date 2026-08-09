@@ -249,6 +249,7 @@ export type DraftingItemSummary = {
     send_status: 'unsent' | 'queued' | 'sending' | 'sent' | 'failed';
     queue_id: string | null;
     schedule_date: string | null;
+    email_send_id: string | null;
     sent_at: string | null;
     send_error: string | null;
     engagement: EmailEngagementLifecycle;
@@ -420,6 +421,7 @@ export function parseDeliverySnapshot(
 }
 
 type EmailSendRecord = {
+  id: string;
   status: 'sent' | 'failed';
   sent_at: string | null;
   provider_message_id: string | null;
@@ -474,6 +476,7 @@ async function loadLatestEmailSendStatuses(
 ): Promise<Map<string, EmailSendRecord>> {
   if (itemIds.length === 0) return new Map();
   const { rows } = await dbQuery<{
+    id: string;
     drafting_item_id: string;
     status: 'sent' | 'failed';
     sent_at: string | null;
@@ -489,7 +492,7 @@ async function loadLatestEmailSendStatuses(
     click_count: number | null;
   }>(
     `SELECT DISTINCT ON (drafting_item_id)
-            drafting_item_id, status, sent_at, provider_message_id, error_message,
+            id::text, drafting_item_id, status, sent_at, provider_message_id, error_message,
             delivered_at, opened_at, clicked_at, bounced_at, complained_at, replied_at,
             open_count, click_count
        FROM outreach.email_sends
@@ -498,6 +501,7 @@ async function loadLatestEmailSendStatuses(
     [itemIds],
   );
   return new Map(rows.map((row) => [row.drafting_item_id, {
+    id: row.id,
     status: row.status,
     sent_at: row.sent_at,
     provider_message_id: row.provider_message_id,
@@ -575,6 +579,7 @@ function summarizeItem(
                   : 'unsent',
           queue_id: queueInfo?.queue_id ?? null,
           schedule_date: queueInfo?.schedule_date ?? null,
+          email_send_id: sendStatus?.id ?? null,
           sent_at: sendStatus?.sent_at ?? null,
           send_error: sendStatus?.error_message ?? null,
           engagement: deriveEmailEngagementLifecycle(sendStatus),

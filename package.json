@@ -10,6 +10,7 @@
     "db:bootstrap": "psql \"%DIRECT_DATABASE_URL%\" -f db/bootstrap.sql",
     "db:outreach": "node scripts/apply_outreach_schema.js",
     "db:drafting": "node scripts/apply_drafting_schema.js",
+    "db:reply": "node scripts/apply_reply_schema.js",
     "db:orchestration": "node scripts/apply_orchestration_schema.js",
     "db:analytics": "node scripts/apply_analytics_schema.js",
     "db:setup": "node scripts/db_setup.js",

@@ -36,6 +36,7 @@ const files = [
   'db/bootstrap.sql',
   'db/outreach_schema.sql',
   'db/drafting_schema.sql',
+  'db/reply_schema.sql',
   'db/migrate_duration_aware_timeliness_v2.sql',
   'db/migrate_draft_generation_mode.sql',
   'db/cost_ledger_schema.sql',

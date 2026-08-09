@@ -6,6 +6,7 @@ import { preflightFinalDraftExport, preflightFinalDraftSend } from '@/lib/drafti
 import { deriveEmailEngagementLifecycle } from '@/lib/drafting/repository';
 import {
   isEmailSendConfigured,
+  outboundReplyToAddress,
   parseReplyPlusItemId,
   replyToAddressForItem,
 } from '@/lib/drafting/send';
@@ -86,7 +87,14 @@ test('preflightFinalDraftSend still requires fresh fingerprints; export does not
   assert.equal(preflightFinalDraftSend([row]).ok, false);
 });
 
-test('reply plus-address parses item id for inbound matching', () => {
+test('outbound Reply-To helper still returns sender work email as fallback', () => {
+  assert.equal(outboundReplyToAddress('tommy@heliosgroup.ai'), 'tommy@heliosgroup.ai');
+  assert.equal(outboundReplyToAddress('  lucas@heliosgroup.ai  '), 'lucas@heliosgroup.ai');
+  assert.equal(outboundReplyToAddress(''), undefined);
+  assert.equal(outboundReplyToAddress('   '), undefined);
+});
+
+test('reply plus-address is used for inbound routing and parses item id', () => {
   const original = process.env.RESEND_REPLY_DOMAIN;
   try {
     process.env.RESEND_REPLY_DOMAIN = 'replies.heliosgroup.ai';

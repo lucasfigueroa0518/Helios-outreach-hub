@@ -18,6 +18,8 @@ export const WORK_KINDS = [
   'drafting.job.process',
   'drafting.job.write',
   'email.send',
+  'reply.respond',
+  'reply.followup',
   'system.reconcile',
 ] as const;
 
@@ -83,6 +85,8 @@ export type WorkPayloadMap = {
   'drafting.job.process': { jobId: string };
   'drafting.job.write': { jobId: string };
   'email.send': { queueId: string };
+  'reply.respond': { replySendId: string };
+  'reply.followup': { replySendId: string };
   'system.reconcile': { reason?: string };
 };
 
