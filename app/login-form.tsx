@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { signIn } from 'next-auth/react';
 
 function errorMessage(code: string | null): string | null {
@@ -33,9 +33,7 @@ function GoogleMark() {
 }
 
 export function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,33 +46,16 @@ export function LoginForm() {
     if (urlError) setError(urlError);
   }, [urlError]);
 
-  useEffect(() => {
-    fetch('/api/auth/me')
-      .then((r) => {
-        if (r.ok) router.replace('/hub');
-        else setChecking(false);
-      })
-      .catch(() => setChecking(false));
-  }, [router]);
-
   async function continueWithGoogle() {
     setError(null);
     setLoading(true);
     try {
-      await signIn('google', { callbackUrl: '/hub' });
+      // Land on the product chooser after Auth.js (not directly into /hub).
+      await signIn('google', { callbackUrl: '/' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign-in failed');
       setLoading(false);
     }
-  }
-
-  if (checking) {
-    return (
-      <div className="login-page">
-        <div className="login-page__atmosphere" aria-hidden="true" />
-        <p className="login-page__loading">Loading…</p>
-      </div>
-    );
   }
 
   return (
@@ -89,7 +70,6 @@ export function LoginForm() {
       <section className="login-page__stage" aria-label="Sign in">
         <h1 className="login-page__brand">
           <span className="login-page__brand-line">Helios</span>
-          <span className="login-page__brand-line">Outreach Hub</span>
         </h1>
 
         {error ? <p className="login-page__error" role="alert">{error}</p> : null}

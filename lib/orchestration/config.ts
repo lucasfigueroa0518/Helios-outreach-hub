@@ -35,6 +35,7 @@ export const KIND_CONFIG: Record<WorkKind, KindConfig> = {
   'email.send': { lane: 'email_send', defaultMaxAttempts: 3, priority: 25 },
   'reply.respond': { lane: 'email_send', defaultMaxAttempts: 3, priority: 35 },
   'reply.followup': { lane: 'email_send', defaultMaxAttempts: 3, priority: 30 },
+  'dashboards.daily_update': { lane: 'dashboards', defaultMaxAttempts: 2, priority: -5 },
   'system.reconcile': { lane: 'maintenance', defaultMaxAttempts: 3, priority: -10 },
 };
 
@@ -70,6 +71,9 @@ export function laneLimit(lane: WorkLane): number {
       return effectiveDraftingWriteLaneLimit();
     case 'email_send':
       return positiveInt('ORG_EMAIL_SEND_CONCURRENCY', 2, 10);
+    case 'dashboards':
+      // GitHub + Anthropic per active project; keep tiny on e2-micro.
+      return positiveInt('ORG_DASHBOARDS_CONCURRENCY', 1, 2);
     case 'maintenance':
       return 1;
   }

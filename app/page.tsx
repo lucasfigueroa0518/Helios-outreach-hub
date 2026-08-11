@@ -1,8 +1,16 @@
 import { Suspense } from 'react';
 
 import { LoginForm } from '@/app/login-form';
+import { ProductChooser } from '@/app/product-chooser';
+import { getSession } from '@/lib/session';
 
-export default function LoginPage() {
+export default async function HomePage() {
+  const session = await getSession();
+
+  if (session) {
+    return <ProductChooser email={session.email} />;
+  }
+
   return (
     <Suspense
       fallback={(

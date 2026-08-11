@@ -5,8 +5,20 @@ import { authConfig } from '@/auth.config';
 
 const { auth } = NextAuth(authConfig);
 
+function isStaticAsset(pathname: string): boolean {
+  // public/dashboards/* shares the /dashboards URL prefix with App Router pages.
+  // Those files must not go through auth redirects (Image optimizer / <img> / fonts).
+  return /\.(?:png|jpe?g|gif|webp|svg|ico|otf|ttf|woff2?|pdf|txt|map)$/i.test(pathname);
+}
+
 function isPublicPath(pathname: string): boolean {
   if (pathname === '/') return true;
+  if (isStaticAsset(pathname)) return true;
+  // Client dashboard links (token-gated in app code; no Auth.js session required).
+  if (pathname.startsWith('/d/')) return true;
+  if (pathname.startsWith('/dashboards/d/')) return true;
+  // Deck PDFs are gated by project access_token, not Auth.js session.
+  if (pathname.startsWith('/api/dashboards/deck/')) return true;
   if (pathname.startsWith('/api/auth')) return true;
   if (pathname === '/api/health') return true;
   if (pathname === '/api/webhooks/resend') return true;
@@ -16,9 +28,12 @@ function isPublicPath(pathname: string): boolean {
 }
 
 function isProtectedPage(pathname: string): boolean {
+  if (isStaticAsset(pathname)) return false;
   return pathname === '/hub'
     || pathname.startsWith('/hub/')
-    || pathname.startsWith('/campaigns/');
+    || pathname.startsWith('/campaigns/')
+    || pathname === '/dashboards'
+    || (pathname.startsWith('/dashboards/') && !pathname.startsWith('/dashboards/d/'));
 }
 
 export default auth((req) => {
@@ -50,6 +65,9 @@ export const config = {
     '/',
     '/hub/:path*',
     '/campaigns/:path*',
+    '/dashboards',
+    '/dashboards/:path*',
+    '/d/:path*',
     '/api/:path*',
   ],
 };

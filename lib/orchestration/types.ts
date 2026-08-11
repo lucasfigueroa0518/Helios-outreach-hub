@@ -20,6 +20,7 @@ export const WORK_KINDS = [
   'email.send',
   'reply.respond',
   'reply.followup',
+  'dashboards.daily_update',
   'system.reconcile',
 ] as const;
 
@@ -37,6 +38,7 @@ export const WORK_LANES = [
   'drafting',
   'drafting_write',
   'email_send',
+  'dashboards',
   'maintenance',
 ] as const;
 
@@ -87,6 +89,7 @@ export type WorkPayloadMap = {
   'email.send': { queueId: string };
   'reply.respond': { replySendId: string };
   'reply.followup': { replySendId: string };
+  'dashboards.daily_update': { reason?: string };
   'system.reconcile': { reason?: string };
 };
 

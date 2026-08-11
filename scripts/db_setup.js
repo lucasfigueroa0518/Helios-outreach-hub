@@ -42,6 +42,7 @@ const files = [
   'db/cost_ledger_schema.sql',
   'db/orchestration_schema.sql',
   'db/analytics_schema.sql',
+  'db/dashboards_schema.sql',
 ];
 for (const file of files) {
   console.log(`\n── ${file} ──`);

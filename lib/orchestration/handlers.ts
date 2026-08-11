@@ -669,6 +669,28 @@ async function handleReconcile(
     // Keep reconcile resilient.
   }
 
+  // Helios Dashboards: enqueue one daily GitHub sync + AI update pass after
+  // 09:00 UTC (same cadence as the old Vercel cron). Dedupe by UTC date.
+  let dashboardsDailyEnqueued = 0;
+  try {
+    const now = new Date();
+    if (now.getUTCHours() >= 9) {
+      const dayKey = now.toISOString().slice(0, 10);
+      await enqueueWorkBatch([
+        child(
+          'dashboards.daily_update',
+          { reason: 'scheduled' },
+          dayKey,
+          'dashboards',
+          { maxAttempts: 2, priority: -5 },
+        ),
+      ]);
+      dashboardsDailyEnqueued = 1;
+    }
+  } catch {
+    // Keep reconcile resilient.
+  }
+
   // Close idle drafting runs everywhere (also repairs historical eternal
   // `active` runs that predate run finalization).
   let draftingRunsFinalized = 0;
@@ -701,7 +723,24 @@ async function handleReconcile(
       gatesWarmed,
       emailDeliveryReconciled,
       emailSendQueueRevived,
+      dashboardsDailyEnqueued,
       staleWorkersRemoved,
+    },
+  };
+}
+
+async function handleDashboardsDailyUpdate(
+  job: OrchestrationJob<'dashboards.daily_update'>,
+): Promise<WorkHandlerResult> {
+  const { runDailyUpdate } = await import('@/lib/dashboards/daily-update');
+  const results = await runDailyUpdate();
+  return {
+    result: {
+      reason: job.payload.reason ?? null,
+      projects: results.length,
+      totalSynced: results.reduce((n, r) => n + r.synced, 0),
+      totalGenerated: results.filter((r) => r.generated).length,
+      failures: results.filter((r) => r.syncError || r.generateError).length,
     },
   };
 }
@@ -730,6 +769,7 @@ const HANDLERS: Record<WorkKind, Handler> = {
   'email.send': handleEmailSend as Handler,
   'reply.respond': handleReplyRespond as Handler,
   'reply.followup': handleReplyFollowup as Handler,
+  'dashboards.daily_update': handleDashboardsDailyUpdate as Handler,
   'system.reconcile': handleReconcile as Handler,
 };
 
