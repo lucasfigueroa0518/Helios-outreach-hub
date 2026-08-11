@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   useCallback,
@@ -93,37 +94,44 @@ export function HubNav() {
   }
 
   return (
-    <nav className="hub-nav-row" aria-label="Outreach Hub sections">
-      <div ref={trackRef} className="segmented hub-nav" role="tablist">
-        <span
-          className={`hub-nav__thumb${thumb.ready ? ' hub-nav__thumb--ready' : ''}`}
-          aria-hidden="true"
-          style={{
-            width: thumb.width,
-            transform: `translateX(${thumb.left}px)`,
-          }}
-        />
-        {TABS.map((tab, index) => {
-          const selected = tab.id === activeId;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              className={`hub-nav__item${selected ? ' hub-nav__item--active' : ''}`}
-              ref={(node) => {
-                itemRefs.current[index] = node;
-              }}
-              onMouseEnter={() => prefetchTab(tab, router)}
-              onFocus={() => prefetchTab(tab, router)}
-              onClick={() => goTo(tab)}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-    </nav>
+    <div className="hub-nav-row">
+      <Link href="/" className="hub-nav-home" aria-label="Back to Helios products">
+        <span className="hub-nav-home__brand">Helios</span>
+        <span className="hub-nav-home__product">Outreach</span>
+      </Link>
+      <nav className="hub-nav-row__tabs" aria-label="Outreach Hub sections">
+        <div ref={trackRef} className="segmented hub-nav" role="tablist">
+          <span
+            className={`hub-nav__thumb${thumb.ready ? ' hub-nav__thumb--ready' : ''}`}
+            aria-hidden="true"
+            style={{
+              width: thumb.width,
+              transform: `translateX(${thumb.left}px)`,
+            }}
+          />
+          {TABS.map((tab, index) => {
+            const selected = tab.id === activeId;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                className={`hub-nav__item${selected ? ' hub-nav__item--active' : ''}`}
+                ref={(node) => {
+                  itemRefs.current[index] = node;
+                }}
+                onMouseEnter={() => prefetchTab(tab, router)}
+                onFocus={() => prefetchTab(tab, router)}
+                onClick={() => goTo(tab)}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+      <span className="hub-nav-row__balance" aria-hidden="true" />
+    </div>
   );
 }
