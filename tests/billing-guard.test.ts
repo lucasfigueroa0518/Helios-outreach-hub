@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { parseGcpBudgetNotification } from '@/lib/billing-guard';
 
-test('parseGcpBudgetNotification trips on Pub/Sub budget payload with cost', () => {
+test('parseGcpBudgetNotification records Pub/Sub budget payload with cost', () => {
   const inner = {
     budgetDisplayName: 'helios-worker-zero',
     costAmount: { currencyCode: 'USD', units: '0', nanos: 2500000 },
@@ -15,20 +15,21 @@ test('parseGcpBudgetNotification trips on Pub/Sub budget payload with cost', () 
     },
   };
   const parsed = parseGcpBudgetNotification(envelope);
-  assert.equal(parsed.shouldTrip, true);
+  assert.equal(parsed.shouldRecord, true);
   assert.ok(parsed.costAmount != null && parsed.costAmount > 0);
   assert.equal(parsed.currencyCode, 'USD');
-  assert.match(parsed.detail, /fail-closed/i);
+  assert.match(parsed.detail, /Analytics Hub/i);
+  assert.doesNotMatch(parsed.detail, /fail-closed/i);
 });
 
-test('parseGcpBudgetNotification trips on flat GCP costAmount number', () => {
+test('parseGcpBudgetNotification records flat GCP costAmount number', () => {
   const parsed = parseGcpBudgetNotification({
     budgetDisplayName: 'helios-worker-zero',
     costAmount: 0.0042,
     currencyCode: 'USD',
     alertThresholdExceeded: 0.01,
   });
-  assert.equal(parsed.shouldTrip, true);
+  assert.equal(parsed.shouldRecord, true);
   assert.equal(parsed.costAmount, 0.0042);
   assert.equal(parsed.currencyCode, 'USD');
 });
@@ -38,14 +39,15 @@ test('parseGcpBudgetNotification ignores notifications without a cost amount', (
     budgetDisplayName: 'helios-worker-zero',
     alertThresholdExceeded: 1,
   });
-  assert.equal(parsed.shouldTrip, false);
+  assert.equal(parsed.shouldRecord, false);
 });
 
-test('parseGcpBudgetNotification ignores zero-cost status pings', () => {
+test('parseGcpBudgetNotification records zero-cost status pings', () => {
   const parsed = parseGcpBudgetNotification({
     budgetDisplayName: 'helios-worker-zero',
     costAmount: 0,
     currencyCode: 'USD',
   });
-  assert.equal(parsed.shouldTrip, false);
+  assert.equal(parsed.shouldRecord, true);
+  assert.equal(parsed.costAmount, 0);
 });

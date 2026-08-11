@@ -973,10 +973,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_email_send_queue_item_active
     ON outreach.email_send_queue (drafting_item_id)
     WHERE status IN ('queued', 'sending');
 
--- ── Cloud worker billing guard (fail-closed when GCP spend > $0) ─────────────
+-- ── Cloud worker GCP spend tracking (Analytics Hub; never fail-closes) ───────
 
 CREATE TABLE IF NOT EXISTS outreach.billing_guard (
     id              text PRIMARY KEY DEFAULT 'cloud_worker',
+    -- Legacy fail-closed flag; always kept false. Spend is tracked only.
     tripped         boolean NOT NULL DEFAULT false,
     cost_amount     numeric(20, 6),
     currency_code   text,

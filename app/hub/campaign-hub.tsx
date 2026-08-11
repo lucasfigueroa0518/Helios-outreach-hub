@@ -6,7 +6,6 @@ import { signOut } from 'next-auth/react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { HubPlaneFlight } from '@/app/components/plane-flight';
-import { BillingGuardAlert } from '@/app/hub/billing-guard-alert';
 import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
 import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { LeadListTutorial } from '@/app/hub/lead-list-tutorial';
@@ -163,17 +162,11 @@ export function CampaignHub({ email }: { email: string }) {
   }
 
   if (loading && campaigns.length === 0) {
-    return (
-      <>
-        <BillingGuardAlert />
-        <HubLoadingSpinner label="Loading campaigns" />
-      </>
-    );
+    return <HubLoadingSpinner label="Loading campaigns" />;
   }
 
   return (
     <main className="app-shell">
-      <BillingGuardAlert />
       <section className="card">
         <div className="card__header">
           <div>

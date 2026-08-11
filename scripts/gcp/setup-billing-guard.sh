@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create GCP budget + Pub/Sub push → Helios billing-guard webhook (>$0 fail-closed).
+# Create GCP budget + Pub/Sub push → Helios cloud-worker spend webhook (Analytics Hub).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -108,7 +108,7 @@ EXISTING_BUDGET="$(gcloud billing budgets list \
   --format='value(name)' 2>/dev/null | head -1 || true)"
 
 if [[ -z "${EXISTING_BUDGET}" ]]; then
-  # Near-zero amount so any project spend crosses early thresholds; webhook trips on costAmount > 0.
+  # Near-zero amount so spend updates publish frequently for Analytics Hub tracking.
   gcloud billing budgets create \
     --billing-account="${BILLING_ACCOUNT}" \
     --display-name="${BUDGET_NAME}" \
@@ -122,7 +122,7 @@ else
 fi
 
 echo ""
-echo "Billing guard wiring complete."
+echo "Cloud worker spend tracking wiring complete."
 echo "  Project:   ${PROJECT}"
 echo "  Topic:     ${TOPIC}"
 echo "  Push URL:  ${PUBLIC_URL%/}/api/webhooks/gcp-billing?token=***"
@@ -130,6 +130,7 @@ echo "  Budget:    ${BUDGET_NAME} (\$0.01, alert at 1% and 100%)"
 echo ""
 echo "Set the same secrets on Vercel production:"
 echo "  GCP_BILLING_WEBHOOK_TOKEN"
-echo "  BILLING_GUARD_CLEAR_SECRET"
+echo "  BILLING_GUARD_CLEAR_SECRET (optional)"
 echo ""
+echo "Spend appears in Analytics Hub → Cloud worker (GCP)."
 echo "Clear-secret length: ${#CLEAR_SECRET}"

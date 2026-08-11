@@ -90,7 +90,6 @@ export class OrchestrationWorker {
   private laneCursor = 0;
   private activeByLane = new Map<WorkLane, number>();
   private stopPromise: Promise<number> | null = null;
-  private lastBillingGuardLogAt = 0;
 
   constructor(workerId = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`) {
     this.workerId = workerId;
@@ -193,20 +192,6 @@ export class OrchestrationWorker {
     if (this.stopping) return;
     const maximum = workerMaxConcurrency();
     try {
-      // Fail-closed: if GCP billing guard tripped (spend > $0), do not claim work.
-      const { isBillingGuardTripped } = await import('@/lib/billing-guard');
-      if (await isBillingGuardTripped()) {
-        const now = Date.now();
-        if (now - this.lastBillingGuardLogAt > 60_000) {
-          this.lastBillingGuardLogAt = now;
-          log('error', 'billing_guard_fail_closed', {
-            workerId: this.workerId,
-            message: 'Cloud worker billing guard is tripped; refusing to claim jobs',
-          });
-        }
-        return;
-      }
-
       let checked = 0;
       while (!this.stopping && this.active.size < maximum && checked < WORK_LANES.length) {
         const lane = WORK_LANES[this.laneCursor % WORK_LANES.length] as WorkLane;

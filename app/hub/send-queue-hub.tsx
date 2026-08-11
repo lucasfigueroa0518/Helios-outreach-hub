@@ -2,13 +2,13 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { CalendarClock, Send, Trash2, RotateCcw, X } from 'lucide-react';
+import { CalendarClock, Send, Share2, Trash2, RotateCcw, X } from 'lucide-react';
 
 import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
 import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { requestJson } from '@/lib/client-request';
 import { formatNyDateLabel } from '@/lib/drafting/send-queue-schedule';
-import type { QueueDayBucket, QueueListItem } from '@/lib/drafting/send-queue';
+import type { QueueDayBucket, QueueListItem, ShareTargetUser } from '@/lib/drafting/send-queue';
 
 type QueueListResponse = {
   days: QueueDayBucket[];
@@ -36,6 +36,10 @@ export function SendQueueHub() {
   const [dragIds, setDragIds] = useState<string[] | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detail, setDetail] = useState<QueueDetailResponse | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareTargets, setShareTargets] = useState<ShareTargetUser[] | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const shareMenuRef = useRef<HTMLDivElement>(null);
   const hasDataRef = useRef(false);
 
   const load = useCallback(async (force = false) => {
@@ -65,6 +69,24 @@ export function SendQueueHub() {
       .then((res) => setCampaigns(res.campaigns.map((c) => ({ id: c.id, name: c.name }))))
       .catch(() => setCampaigns([]));
   }, []);
+
+  useEffect(() => {
+    if (!shareOpen) return;
+    function onPointerDown(event: MouseEvent) {
+      if (!shareMenuRef.current?.contains(event.target as Node)) {
+        setShareOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setShareOpen(false);
+    }
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [shareOpen]);
 
   useEffect(() => {
     if (!detailId) {
@@ -166,7 +188,47 @@ export function SendQueueHub() {
     });
   }
 
-  const backlogCount = data?.days.reduce((sum, day) => sum + day.queued_count, 0) ?? 0;
+  const backlogCount = data?.days.reduce(
+    (sum, day) => sum + day.items.filter((i) => i.status === 'queued' || i.status === 'failed' || i.status === 'sending').length,
+    0,
+  ) ?? 0;
+
+  async function openShareMenu() {
+    if (shareOpen) {
+      setShareOpen(false);
+      return;
+    }
+    setShareOpen(true);
+    setShareLoading(true);
+    try {
+      const result = await requestJson<{ users: ShareTargetUser[] }>('/api/send-queue/share-targets');
+      setShareTargets(result.users);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load teammates');
+      setShareOpen(false);
+    } finally {
+      setShareLoading(false);
+    }
+  }
+
+  async function shareWithUser(target: ShareTargetUser) {
+    setShareOpen(false);
+    await runAction(async () => {
+      const result = await requestJson<{
+        transferred: number;
+        sharer_backlog: number;
+        recipient_backlog: number;
+      }>('/api/send-queue/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_user_id: target.id }),
+      });
+      setShareTargets(null);
+      setMessage(
+        `Shared ${result.transferred} with ${target.email} · you ${result.sharer_backlog} · them ${result.recipient_backlog}`,
+      );
+    });
+  }
 
   if (loading && !data) {
     return <HubLoadingSpinner label="Loading queue" />;
@@ -206,6 +268,59 @@ export function SendQueueHub() {
               </select>
             </label>
             <div className="send-queue-toolbar__actions">
+              <div className="send-queue-share" ref={shareMenuRef}>
+                <button
+                  type="button"
+                  className="btn btn--secondary"
+                  disabled={busy || backlogCount === 0}
+                  aria-expanded={shareOpen}
+                  aria-haspopup="menu"
+                  onClick={() => void openShareMenu()}
+                >
+                  <Share2 size={14} /> Share
+                </button>
+                {shareOpen ? (
+                  <div className="send-queue-share__menu" role="menu">
+                    <div className="send-queue-share__hint">
+                      Equalize backlog with a teammate. Both queues pack to the earliest open days.
+                    </div>
+                    {shareLoading || !shareTargets ? (
+                      <p className="send-queue-share__empty">Loading teammates…</p>
+                    ) : shareTargets.length === 0 ? (
+                      <p className="send-queue-share__empty">No other users found.</p>
+                    ) : (
+                      shareTargets.map((user) => (
+                        <button
+                          key={user.id}
+                          type="button"
+                          role="menuitem"
+                          className="send-queue-share__option"
+                          disabled={busy || user.backlog_count >= backlogCount}
+                          onClick={() => void shareWithUser(user)}
+                        >
+                          <span className="send-queue-share__identity">
+                            <span className="send-queue-share__email">{user.email}</span>
+                            {user.display_name && user.display_name !== user.email ? (
+                              <span className="send-queue-share__name">{user.display_name}</span>
+                            ) : null}
+                          </span>
+                          <span
+                            className="send-queue-share__days"
+                            aria-label={`Next five days: ${user.day_occupancy.filter(Boolean).length} occupied`}
+                          >
+                            {user.day_occupancy.map((occupied, index) => (
+                              <span
+                                key={index}
+                                className={`send-queue-share__day${occupied ? ' send-queue-share__day--full' : ''}`}
+                              />
+                            ))}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </div>
               <button
                 type="button"
                 className="btn btn--primary"

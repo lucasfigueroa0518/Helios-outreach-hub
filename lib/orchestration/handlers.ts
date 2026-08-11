@@ -493,14 +493,6 @@ async function handleReplyFollowup(
 async function handleEmailSend(
   job: OrchestrationJob<'email.send'>,
 ): Promise<WorkHandlerResult> {
-  const { isBillingGuardTripped } = await import('@/lib/billing-guard');
-  if (await isBillingGuardTripped()) {
-    throw new RetryableWorkError(
-      'Billing guard fail-closed: cloud worker spend exceeded $0',
-      5 * 60_000,
-      'billing_guard_tripped',
-    );
-  }
   const { processQueuedEmailSend } = await import('@/lib/drafting/send-queue');
   const result = await processQueuedEmailSend(job.payload.queueId);
   // Permanent send failures stay on the queue row for user Retry; do not

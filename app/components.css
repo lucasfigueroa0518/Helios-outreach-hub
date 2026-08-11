@@ -3798,11 +3798,101 @@ a.segmented__item { text-decoration: none; }
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  align-items: center;
 }
 .send-queue-toolbar__actions .btn {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+}
+.send-queue-share {
+  position: relative;
+}
+.send-queue-share__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-dropdown, 40);
+  width: min(320px, calc(100vw - 2rem));
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.send-queue-share__hint {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  line-height: 1.35;
+}
+.send-queue-share__empty {
+  margin: 0;
+  padding: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+.send-queue-share__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.send-queue-share__option:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.send-queue-share__option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.send-queue-share__identity {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.send-queue-share__email {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.send-queue-share__name {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.send-queue-share__days {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.send-queue-share__day {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1.5px solid var(--color-primary);
+  background: transparent;
+  box-sizing: border-box;
+}
+.send-queue-share__day--full {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
 }
 .send-queue-filter {
   display: flex;
@@ -3945,80 +4035,6 @@ a.drafting-status-chip--queued:hover {
   text-decoration: underline;
 }
 .muted { color: var(--color-text-muted); font-size: var(--font-size-sm); }
-
-/* ---- Billing guard (GCP $0 fail-closed) ------------------------------------ */
-.billing-guard-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--color-negative);
-  border-radius: var(--radius-md);
-  background: var(--color-negative-soft);
-  color: var(--color-negative);
-}
-.billing-guard-banner__copy {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  font-size: var(--font-size-sm);
-  min-width: 220px;
-}
-.billing-guard-banner__copy strong {
-  color: var(--color-negative);
-}
-.billing-guard-banner .btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  white-space: nowrap;
-}
-.billing-guard-modal-overlay {
-  z-index: calc(var(--z-slideover) + 10);
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-4);
-}
-.billing-guard-modal {
-  width: min(520px, 100%);
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--color-negative);
-  padding: var(--space-5);
-}
-.billing-guard-modal__header {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-  color: var(--color-negative);
-}
-.billing-guard-modal__header h2 {
-  flex: 1;
-  margin: 0;
-  font-size: var(--font-size-lg);
-  line-height: var(--line-height-tight);
-  color: var(--color-text);
-}
-.billing-guard-modal__body {
-  font-size: var(--font-size-sm);
-  color: var(--color-text);
-}
-.billing-guard-modal__body p { margin: 0 0 var(--space-3); }
-.billing-guard-modal__body ul {
-  margin: 0 0 var(--space-4);
-  padding-left: 1.2rem;
-}
-.billing-guard-modal__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  justify-content: flex-end;
-}
 
 /* ---- Tag input (compact add + existing-tag picker) ------------------------- */
 .tag-input {

@@ -495,6 +495,29 @@ export function AnalyticsHub() {
                     metricKey="total_spend"
                     onClick={() => setDrilldownMetricKey('total_spend')}
                   />
+                  <div className="analytics-stat">
+                    <span className="analytics-stat__label">Cloud worker (GCP)</span>
+                    <strong className="analytics-stat__value" style={{ fontSize: 'var(--font-size-xl)' }}>
+                      {formatUsd(summary?.cloud_worker_spend.cost_usd)}
+                    </strong>
+                    <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-subtle)' }}>
+                      {summary?.cloud_worker_spend.updated_at
+                        ? `Updated ${new Date(summary.cloud_worker_spend.updated_at).toLocaleString()}`
+                        : 'Awaiting first budget notification'}
+                      {summary?.cloud_worker_spend.console_url ? (
+                        <>
+                          {' · '}
+                          <a
+                            href={summary.cloud_worker_spend.console_url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            GCP billing
+                          </a>
+                        </>
+                      ) : null}
+                    </span>
+                  </div>
                 </div>
               </section>
 

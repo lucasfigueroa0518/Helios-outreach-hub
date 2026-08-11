@@ -1,9 +1,8 @@
 import { NextRequest } from 'next/server';
 
 import {
-  acknowledgeBillingGuard,
   clearBillingGuard,
-  getBillingGuardState,
+  getCloudWorkerSpendState,
 } from '@/lib/billing-guard';
 import { draftingErrorResponse, draftingJson } from '@/lib/drafting/api';
 import { getSession } from '@/lib/session';
@@ -15,18 +14,23 @@ export async function GET() {
   if (!session) return draftingJson({ error: 'Unauthorized' }, 401);
 
   try {
-    const state = await getBillingGuardState();
-    return draftingJson({ guard: state });
+    const spend = await getCloudWorkerSpendState();
+    return draftingJson({
+      spend,
+      // Legacy shape for any older clients.
+      guard: spend,
+    });
   } catch (error) {
     return draftingErrorResponse(error);
   }
 }
 
+/** Optional admin clear of any leftover fail-closed flag from the old $0 guard. */
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session) return draftingJson({ error: 'Unauthorized' }, 401);
 
-  let body: { action?: 'acknowledge' | 'clear'; confirm?: boolean };
+  let body: { action?: 'clear'; confirm?: boolean };
   try {
     body = await request.json();
   } catch {
@@ -34,34 +38,29 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    if (body.action === 'acknowledge') {
-      const guard = await acknowledgeBillingGuard();
-      return draftingJson({ guard });
-    }
-
     if (body.action === 'clear') {
       if (body.confirm !== true) {
-        return draftingJson({ error: 'confirm: true is required to clear the billing guard' }, 400);
+        return draftingJson({ error: 'confirm: true is required to clear' }, 400);
       }
       const clearSecret = process.env.BILLING_GUARD_CLEAR_SECRET?.trim();
       const provided = request.headers.get('x-billing-guard-clear')?.trim();
       if (!clearSecret || !provided || provided !== clearSecret) {
         return draftingJson(
           {
-            error: 'Clearing the fail-closed guard requires BILLING_GUARD_CLEAR_SECRET header',
+            error: 'Clearing requires BILLING_GUARD_CLEAR_SECRET header',
             code: 'clear_secret_required',
           },
           403,
         );
       }
-      const guard = await clearBillingGuard({
+      const spend = await clearBillingGuard({
         source: `manual_clear:${session.email}`,
-        detail: 'Manually cleared after reviewing GCP billing. Worker may resume.',
+        detail: 'Manually cleared leftover fail-closed flag. Worker spend is tracked only.',
       });
-      return draftingJson({ guard });
+      return draftingJson({ spend, guard: spend });
     }
 
-    return draftingJson({ error: 'action must be acknowledge or clear' }, 400);
+    return draftingJson({ error: 'action must be clear' }, 400);
   } catch (error) {
     return draftingErrorResponse(error);
   }

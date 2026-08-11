@@ -7,6 +7,8 @@ import {
   SEND_WINDOW_START_HOUR,
   addCalendarDays,
   allocateOverflowSlots,
+  allocatePackedSlots,
+  computeShareTransferCount,
   formatNyDate,
   formatNyDateLabel,
   nyWallTimeToUtc,
@@ -94,4 +96,25 @@ test('remainingCapacity clamps at zero', () => {
   assert.equal(remainingCapacity(15), 5);
   assert.equal(remainingCapacity(20), 0);
   assert.equal(remainingCapacity(25), 0);
+});
+
+test('allocatePackedSlots can start today', () => {
+  const usage = new Map<string, number>([['2026-08-10', 18]]);
+  const slots = allocatePackedSlots({
+    count: 4,
+    dayUsage: usage,
+    startNy: '2026-08-10',
+    rng: () => 0.1,
+  });
+  assert.equal(slots.filter((s) => s.scheduleDate === '2026-08-10').length, 2);
+  assert.equal(slots.filter((s) => s.scheduleDate === '2026-08-11').length, 2);
+});
+
+test('computeShareTransferCount equalizes backlog', () => {
+  assert.equal(computeShareTransferCount(100, 0), 50);
+  assert.equal(computeShareTransferCount(60, 20), 20);
+  assert.equal(computeShareTransferCount(20, 60), 0);
+  assert.equal(computeShareTransferCount(0, 0), 0);
+  assert.equal(computeShareTransferCount(5, 5), 0);
+  assert.equal(computeShareTransferCount(41, 20), 11); // 61 total → 30/31
 });

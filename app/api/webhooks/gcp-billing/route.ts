@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import {
   parseGcpBudgetNotification,
-  tripBillingGuard,
+  recordCloudWorkerSpend,
 } from '@/lib/billing-guard';
 
 export const runtime = 'nodejs';
@@ -32,11 +32,11 @@ export async function POST(request: NextRequest) {
   }
 
   const parsed = parseGcpBudgetNotification(body);
-  if (!parsed.shouldTrip) {
-    return NextResponse.json({ ok: true, tripped: false, ignored: true });
+  if (!parsed.shouldRecord) {
+    return NextResponse.json({ ok: true, recorded: false, ignored: true });
   }
 
-  const state = await tripBillingGuard({
+  const state = await recordCloudWorkerSpend({
     source: 'gcp_budget_pubsub',
     alertTitle: parsed.alertTitle,
     detail: parsed.detail,
@@ -45,19 +45,19 @@ export async function POST(request: NextRequest) {
     rawPayload: parsed.raw,
   });
 
-  console.error(JSON.stringify({
+  console.info(JSON.stringify({
     ts: new Date().toISOString(),
-    level: 'error',
-    component: 'billing-guard',
-    message: 'billing_guard_tripped',
+    level: 'info',
+    component: 'cloud-worker-spend',
+    message: 'cloud_worker_spend_recorded',
     costAmount: state.cost_amount,
     detail: state.detail,
   }));
 
   return NextResponse.json({
     ok: true,
-    tripped: true,
+    recorded: true,
     cost_amount: state.cost_amount,
-    tripped_at: state.tripped_at,
+    updated_at: state.updated_at,
   });
 }

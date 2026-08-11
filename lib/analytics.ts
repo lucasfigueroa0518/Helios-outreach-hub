@@ -2,6 +2,7 @@
  * Outreach Analytics Hub engine with multi-filtering and spend + conversion metrics.
  */
 
+import { getCloudWorkerSpendState } from '@/lib/billing-guard';
 import { dbQuery } from '@/lib/db';
 
 export type AnalyticsPeriod = 'week' | 'month' | 'custom';
@@ -89,6 +90,14 @@ export type AnalyticsSummaryFilters = {
   userId?: string | null;
 };
 
+export type CloudWorkerSpendSummary = {
+  cost_usd: number | null;
+  currency_code: string | null;
+  updated_at: string | null;
+  console_url: string | null;
+  detail: string | null;
+};
+
 export type AnalyticsSummary = {
   window: AnalyticsWindow;
   filters: {
@@ -97,6 +106,7 @@ export type AnalyticsSummary = {
     userId: string | null;
   };
   aggregate: AnalyticsMetricBlock;
+  cloud_worker_spend: CloudWorkerSpendSummary;
   by_user: AnalyticsUserRow[];
   by_campaign: AnalyticsCampaignRow[];
   available_tags: string[];
@@ -654,6 +664,15 @@ export async function getAnalyticsSummary(input: {
     };
   });
 
+  const workerSpend = await getCloudWorkerSpendState();
+  const cloud_worker_spend: CloudWorkerSpendSummary = {
+    cost_usd: workerSpend.cost_amount,
+    currency_code: workerSpend.currency_code,
+    updated_at: workerSpend.updated_at,
+    console_url: workerSpend.console_url,
+    detail: workerSpend.detail,
+  };
+
   return {
     window,
     filters: {
@@ -662,6 +681,7 @@ export async function getAnalyticsSummary(input: {
       userId: cleanUserId,
     },
     aggregate: finalizeMetrics(aggregate),
+    cloud_worker_spend,
     by_user: [...byUser.values()]
       .map((row) => finalizeMetrics(row))
       .sort((a, b) => (b.drafting_cost_usd + b.enrichment_cost_usd) - (a.drafting_cost_usd + a.enrichment_cost_usd)),
@@ -676,6 +696,7 @@ export async function getAnalyticsSummary(input: {
       'Denied proxy = rewrite-path drafting item states (queued_rewrite / rewriting / failed_rewrite).',
       'Excluded runs drop leads via campaign_leads.run_id and leads.source_run_id.',
       'Drafting totals include immutable legacy_unattributed opening balances; per-lead counts never receive that historical residual.',
+      'Cloud worker (GCP) is project billable spend from budget notifications — infra cost, not attributed per campaign/lead.',
     ],
   };
 }

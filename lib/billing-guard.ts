@@ -1,5 +1,9 @@
 /**
- * Fail-closed guard for the always-on GCP worker when billed spend exceeds $0.
+ * Cloud worker GCP spend tracking.
+ *
+ * Budget Pub/Sub notifications update the latest reported project cost so the
+ * Analytics Hub can show infra spend. Spend does not block the orchestration
+ * worker or email sends.
  */
 import { dbQuery } from '@/lib/db';
 
@@ -8,8 +12,9 @@ export const BILLING_GUARD_ID = 'cloud_worker';
 export const DEFAULT_BILLING_CONSOLE_URL =
   'https://console.cloud.google.com/billing/011FD6-E83AAF-E53EF3/reports;projects=helios-influencer-network';
 
-export type BillingGuardState = {
+export type CloudWorkerSpendState = {
   id: string;
+  /** Legacy column — always false; spend never fail-closes the worker. */
   tripped: boolean;
   cost_amount: number | null;
   currency_code: string | null;
@@ -24,6 +29,9 @@ export type BillingGuardState = {
   updated_at: string;
 };
 
+/** @deprecated Use CloudWorkerSpendState */
+export type BillingGuardState = CloudWorkerSpendState;
+
 function asNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
@@ -32,16 +40,7 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
-export async function getBillingGuardState(): Promise<BillingGuardState> {
-  const { rows } = await dbQuery<BillingGuardState>(
-    `SELECT id, tripped, cost_amount::float8 AS cost_amount, currency_code,
-            alert_title, detail, source, console_url, raw_payload,
-            tripped_at::text, cleared_at::text, acknowledged_at::text, updated_at::text
-       FROM outreach.billing_guard
-      WHERE id = $1`,
-    [BILLING_GUARD_ID],
-  );
-  const row = rows[0];
+function mapRow(row: CloudWorkerSpendState | undefined): CloudWorkerSpendState {
   if (!row) {
     return {
       id: BILLING_GUARD_ID,
@@ -61,6 +60,7 @@ export async function getBillingGuardState(): Promise<BillingGuardState> {
   }
   return {
     ...row,
+    tripped: false,
     cost_amount: row.cost_amount == null ? null : Number(row.cost_amount),
     raw_payload: (row.raw_payload && typeof row.raw_payload === 'object')
       ? row.raw_payload as Record<string, unknown>
@@ -68,15 +68,33 @@ export async function getBillingGuardState(): Promise<BillingGuardState> {
   };
 }
 
-export async function isBillingGuardTripped(): Promise<boolean> {
-  const { rows } = await dbQuery<{ tripped: boolean }>(
-    `SELECT tripped FROM outreach.billing_guard WHERE id = $1`,
+export async function getCloudWorkerSpendState(): Promise<CloudWorkerSpendState> {
+  const { rows } = await dbQuery<CloudWorkerSpendState>(
+    `SELECT id, tripped, cost_amount::float8 AS cost_amount, currency_code,
+            alert_title, detail, source, console_url, raw_payload,
+            tripped_at::text, cleared_at::text, acknowledged_at::text, updated_at::text
+       FROM outreach.billing_guard
+      WHERE id = $1`,
     [BILLING_GUARD_ID],
   );
-  return Boolean(rows[0]?.tripped);
+  return mapRow(rows[0]);
 }
 
-export async function tripBillingGuard(input: {
+/** @deprecated Use getCloudWorkerSpendState */
+export async function getBillingGuardState(): Promise<CloudWorkerSpendState> {
+  return getCloudWorkerSpendState();
+}
+
+/**
+ * Always false — retained only so older callers compile during the transition.
+ * Prefer deleting call sites; spend never blocks the worker.
+ */
+export async function isBillingGuardTripped(): Promise<boolean> {
+  return false;
+}
+
+/** Record the latest GCP-reported cloud worker cost (does not trip / fail-close). */
+export async function recordCloudWorkerSpend(input: {
   source: string;
   alertTitle?: string | null;
   detail?: string | null;
@@ -84,16 +102,16 @@ export async function tripBillingGuard(input: {
   currencyCode?: string | null;
   consoleUrl?: string | null;
   rawPayload?: Record<string, unknown>;
-}): Promise<BillingGuardState> {
-  const { rows } = await dbQuery<BillingGuardState>(
+}): Promise<CloudWorkerSpendState> {
+  const { rows } = await dbQuery<CloudWorkerSpendState>(
     `INSERT INTO outreach.billing_guard (
        id, tripped, cost_amount, currency_code, alert_title, detail, source,
        console_url, raw_payload, tripped_at, cleared_at, acknowledged_at, updated_at
      ) VALUES (
-       $1, true, $2, $3, $4, $5, $6, $7, $8::jsonb, now(), NULL, NULL, now()
+       $1, false, $2, $3, $4, $5, $6, $7, $8::jsonb, NULL, NULL, NULL, now()
      )
      ON CONFLICT (id) DO UPDATE SET
-       tripped = true,
+       tripped = false,
        cost_amount = COALESCE(EXCLUDED.cost_amount, outreach.billing_guard.cost_amount),
        currency_code = COALESCE(EXCLUDED.currency_code, outreach.billing_guard.currency_code),
        alert_title = COALESCE(EXCLUDED.alert_title, outreach.billing_guard.alert_title),
@@ -101,8 +119,11 @@ export async function tripBillingGuard(input: {
        source = EXCLUDED.source,
        console_url = COALESCE(EXCLUDED.console_url, outreach.billing_guard.console_url),
        raw_payload = EXCLUDED.raw_payload,
-       tripped_at = COALESCE(outreach.billing_guard.tripped_at, now()),
-       cleared_at = NULL,
+       tripped_at = NULL,
+       cleared_at = CASE
+         WHEN outreach.billing_guard.tripped THEN now()
+         ELSE outreach.billing_guard.cleared_at
+       END,
        updated_at = now()
      RETURNING id, tripped, cost_amount::float8 AS cost_amount, currency_code,
                alert_title, detail, source, console_url, raw_payload,
@@ -111,40 +132,55 @@ export async function tripBillingGuard(input: {
       BILLING_GUARD_ID,
       input.costAmount ?? null,
       input.currencyCode ?? 'USD',
-      input.alertTitle ?? 'Cloud worker billing exceeded $0',
+      input.alertTitle ?? 'Cloud worker GCP spend update',
       input.detail ?? 'GCP reported billable usage for the always-on worker project.',
       input.source,
       input.consoleUrl ?? DEFAULT_BILLING_CONSOLE_URL,
       JSON.stringify(input.rawPayload ?? {}),
     ],
   );
-  return rows[0]!;
+  return mapRow(rows[0]);
 }
 
-export async function acknowledgeBillingGuard(): Promise<BillingGuardState> {
-  const { rows } = await dbQuery<BillingGuardState>(
+/** @deprecated Use recordCloudWorkerSpend */
+export async function tripBillingGuard(input: {
+  source: string;
+  alertTitle?: string | null;
+  detail?: string | null;
+  costAmount?: number | null;
+  currencyCode?: string | null;
+  consoleUrl?: string | null;
+  rawPayload?: Record<string, unknown>;
+}): Promise<CloudWorkerSpendState> {
+  return recordCloudWorkerSpend(input);
+}
+
+export async function acknowledgeBillingGuard(): Promise<CloudWorkerSpendState> {
+  const { rows } = await dbQuery<CloudWorkerSpendState>(
     `UPDATE outreach.billing_guard
-        SET acknowledged_at = now(), updated_at = now()
+        SET acknowledged_at = now(), updated_at = now(), tripped = false
       WHERE id = $1
       RETURNING id, tripped, cost_amount::float8 AS cost_amount, currency_code,
                 alert_title, detail, source, console_url, raw_payload,
                 tripped_at::text, cleared_at::text, acknowledged_at::text, updated_at::text`,
     [BILLING_GUARD_ID],
   );
-  if (!rows[0]) throw new Error('Billing guard row missing');
-  return rows[0];
+  if (!rows[0]) throw new Error('Cloud worker spend row missing');
+  return mapRow(rows[0]);
 }
 
+/** Force-clear any leftover fail-closed flag from the old $0 guard. */
 export async function clearBillingGuard(input: {
   source: string;
   detail?: string | null;
-}): Promise<BillingGuardState> {
-  const { rows } = await dbQuery<BillingGuardState>(
+}): Promise<CloudWorkerSpendState> {
+  const { rows } = await dbQuery<CloudWorkerSpendState>(
     `UPDATE outreach.billing_guard
         SET tripped = false,
             detail = COALESCE($2, detail),
             source = $3,
             cleared_at = now(),
+            tripped_at = NULL,
             updated_at = now()
       WHERE id = $1
       RETURNING id, tripped, cost_amount::float8 AS cost_amount, currency_code,
@@ -152,12 +188,14 @@ export async function clearBillingGuard(input: {
                 tripped_at::text, cleared_at::text, acknowledged_at::text, updated_at::text`,
     [BILLING_GUARD_ID, input.detail ?? null, input.source],
   );
-  if (!rows[0]) throw new Error('Billing guard row missing');
-  return rows[0];
+  if (!rows[0]) throw new Error('Cloud worker spend row missing');
+  return mapRow(rows[0]);
 }
 
-/** Parse GCP Budget Pub/Sub push / budget notification JSON into a trip payload. */
+/** Parse GCP Budget Pub/Sub push / budget notification JSON into a spend update. */
 export function parseGcpBudgetNotification(body: unknown): {
+  shouldRecord: boolean;
+  /** @deprecated Use shouldRecord */
   shouldTrip: boolean;
   costAmount: number | null;
   currencyCode: string | null;
@@ -211,24 +249,24 @@ export function parseGcpBudgetNotification(body: unknown): {
 
   const budgetName = typeof messageData.budgetDisplayName === 'string'
     ? messageData.budgetDisplayName
-    : 'Helios cloud worker $0 budget';
+    : 'Helios cloud worker budget';
 
-  // GCP publishes budget status to Pub/Sub multiple times per day even at $0.
-  // Fail-closed only when reported cost is strictly greater than zero.
-  const shouldTrip = amount != null && amount > 0;
+  // Record whenever GCP includes a cost amount (including $0 status pings).
+  const shouldRecord = amount != null;
 
   const detailParts = [
     `${budgetName}: billable spend reported.`,
     amount != null ? `Reported cost: ${amount} ${currency ?? 'USD'}.` : null,
     threshold != null ? `Threshold: ${(threshold <= 1 ? threshold * 100 : threshold).toFixed(2)}%.` : null,
-    'Orchestration worker is fail-closed until an admin clears the billing guard.',
+    'Tracked in Analytics Hub; worker continues running.',
   ].filter(Boolean);
 
   return {
-    shouldTrip,
+    shouldRecord,
+    shouldTrip: shouldRecord,
     costAmount: amount,
     currencyCode: currency ?? 'USD',
-    alertTitle: 'Cloud worker billing exceeded $0',
+    alertTitle: 'Cloud worker GCP spend update',
     detail: detailParts.join(' '),
     raw: messageData,
   };

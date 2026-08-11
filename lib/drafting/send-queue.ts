@@ -2,21 +2,11 @@
  * Daily send queue — budget, enqueue, manage, and worker delivery.
  */
 import { dbQuery, dbTransaction } from '@/lib/db';
-import { isBillingGuardTripped } from '@/lib/billing-guard';
 import {
   DraftingConflictError,
   DraftingNotFoundError,
   DraftingValidationError,
 } from '@/lib/drafting/errors';
-
-async function assertBillingGuardAllowsSend(): Promise<void> {
-  if (await isBillingGuardTripped()) {
-    throw new DraftingConflictError(
-      'Cloud worker billing guard is tripped (GCP spend > $0). Sends are fail-closed until cleared.',
-      'billing_guard_tripped',
-    );
-  }
-}
 import {
   createResendClient,
   isEmailSendConfigured,
@@ -26,7 +16,10 @@ import {
 import {
   DAILY_SEND_CAP,
   SEND_QUEUE_TIMEZONE,
+  addCalendarDays,
   allocateOverflowSlots,
+  allocatePackedSlots,
+  computeShareTransferCount,
   formatNyDate,
   formatNyDateLabel,
   randomNySendTime,
@@ -41,6 +34,7 @@ import {
 export {
   DAILY_SEND_CAP,
   SEND_QUEUE_TIMEZONE,
+  computeShareTransferCount,
   formatNyDate,
   formatNyDateLabel,
   remainingCapacity,
@@ -307,7 +301,6 @@ export type EnqueueSendInput = {
 };
 
 export async function enqueueOverflowSend(input: EnqueueSendInput): Promise<EmailSendQueueRow> {
-  await assertBillingGuardAllowsSend();
   const existing = await loadActiveQueueByItemIds([input.itemId]);
   const active = existing.get(input.itemId);
   if (active) {
@@ -349,7 +342,6 @@ export async function enqueueOverflowBatch(
   items: EnqueueSendInput[],
 ): Promise<EmailSendQueueRow[]> {
   if (items.length === 0) return [];
-  await assertBillingGuardAllowsSend();
   const today = formatNyDate();
   const usage = await dayUsageForOwner(ownerId, today);
   const slots = allocateOverflowSlots({
@@ -577,6 +569,225 @@ export async function getSendQueueDetail(
     item,
     body_text,
     campaign_href: `/campaigns/${item.campaign_id}/draft?item=${item.drafting_item_id}`,
+  };
+}
+
+const SHARE_OCCUPANCY_DAYS = 5;
+
+export type ShareTargetUser = {
+  id: string;
+  email: string;
+  display_name: string;
+  backlog_count: number;
+  /** Length 5 — today through today+4. True when any queued/sending/failed item lands that day. */
+  day_occupancy: boolean[];
+};
+
+async function loadMovableBacklog(ownerId: string): Promise<EmailSendQueueRow[]> {
+  const { rows } = await dbQuery<EmailSendQueueRow>(
+    `SELECT id, owner_id, drafting_item_id, campaign_id,
+            scheduled_for::text, schedule_date::text, status,
+            to_email, subject, recipient_name, orchestration_job_id,
+            error_message, created_at::text, updated_at::text
+       FROM outreach.email_send_queue
+      WHERE owner_id = $1
+        AND status IN ('queued', 'failed')
+      ORDER BY schedule_date DESC, scheduled_for DESC, created_at DESC`,
+    [ownerId],
+  );
+  return rows;
+}
+
+async function applyQueueItemSchedule(input: {
+  row: EmailSendQueueRow;
+  ownerId: string;
+  scheduleDate: string;
+  scheduledFor: Date;
+}): Promise<void> {
+  const now = new Date();
+  const scheduledFor = input.scheduledFor.getTime() < now.getTime()
+    ? now
+    : input.scheduledFor;
+
+  await dbQuery(
+    `UPDATE outreach.email_send_queue
+        SET owner_id = $2,
+            schedule_date = $3::date,
+            scheduled_for = $4::timestamptz,
+            status = 'queued',
+            error_message = NULL,
+            updated_at = now()
+      WHERE id = $1`,
+    [input.row.id, input.ownerId, input.scheduleDate, scheduledFor.toISOString()],
+  );
+
+  if (input.row.orchestration_job_id) {
+    const updated = await reschedulePendingWork(input.row.orchestration_job_id, scheduledFor);
+    if (updated) return;
+  }
+
+  const jobId = await enqueueWork({
+    kind: 'email.send',
+    payload: { queueId: input.row.id },
+    dedupeKey: `email-send:${input.row.id}`,
+    scopeKey: `email-send:${input.row.id}`,
+    availableAt: scheduledFor,
+    reviveTerminal: true,
+  });
+  await dbQuery(
+    `UPDATE outreach.email_send_queue
+        SET orchestration_job_id = $2, updated_at = now()
+      WHERE id = $1`,
+    [input.row.id, jobId],
+  );
+}
+
+/** Repack movable backlog onto the earliest open days (including today). */
+export async function packOwnerSendQueue(ownerId: string): Promise<number> {
+  const today = formatNyDate();
+  const movable = await loadMovableBacklog(ownerId);
+  if (movable.length === 0) return 0;
+
+  const usage = await dayUsageForOwner(ownerId, today);
+  for (const row of movable) {
+    if (row.status !== 'queued') continue;
+    usage.set(row.schedule_date, Math.max(0, (usage.get(row.schedule_date) ?? 0) - 1));
+  }
+
+  const slots = allocatePackedSlots({
+    count: movable.length,
+    dayUsage: usage,
+    startNy: today,
+  });
+
+  // Furthest-out movable items were loaded DESC; assign earliest slots to the
+  // soonest-intended work by pairing in reverse (oldest backlog first).
+  const ordered = [...movable].reverse();
+  for (let i = 0; i < ordered.length; i += 1) {
+    const row = ordered[i]!;
+    const slot = slots[i]!;
+    await applyQueueItemSchedule({
+      row,
+      ownerId,
+      scheduleDate: slot.scheduleDate,
+      scheduledFor: slot.scheduledFor,
+    });
+  }
+  return ordered.length;
+}
+
+export async function listSendQueueShareTargets(
+  sharerId: string,
+): Promise<ShareTargetUser[]> {
+  const today = formatNyDate();
+  const horizonEnd = addCalendarDays(today, SHARE_OCCUPANCY_DAYS - 1);
+
+  const { rows } = await dbQuery<{
+    id: string;
+    email: string;
+    display_name: string;
+    backlog_count: number;
+    occupied_dates: string[] | null;
+  }>(
+    `SELECT u.id::text AS id,
+            u.email,
+            u.display_name,
+            coalesce(b.backlog_count, 0)::int AS backlog_count,
+            b.occupied_dates
+       FROM outreach.users u
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS backlog_count,
+                array_agg(DISTINCT q.schedule_date::text)
+                  FILTER (
+                    WHERE q.schedule_date >= $2::date
+                      AND q.schedule_date <= $3::date
+                  ) AS occupied_dates
+           FROM outreach.email_send_queue q
+          WHERE q.owner_id = u.id
+            AND q.status IN ('queued', 'sending', 'failed')
+       ) b ON true
+      WHERE u.id <> $1::uuid
+      ORDER BY u.display_name ASC, u.email ASC`,
+    [sharerId, today, horizonEnd],
+  );
+
+  return rows.map((row) => {
+    const occupied = new Set(row.occupied_dates ?? []);
+    const day_occupancy = Array.from({ length: SHARE_OCCUPANCY_DAYS }, (_, i) => (
+      occupied.has(addCalendarDays(today, i))
+    ));
+    return {
+      id: row.id,
+      email: row.email,
+      display_name: row.display_name,
+      backlog_count: Number(row.backlog_count),
+      day_occupancy,
+    };
+  });
+}
+
+/**
+ * Equalize backlog between sharer and recipient, then pack both queues ASAP.
+ * Transfers floor((A+B)/2) - B items from A → B when A has the larger backlog.
+ */
+export async function shareSendQueueWithUser(input: {
+  sharerId: string;
+  targetUserId: string;
+}): Promise<{
+  transferred: number;
+  sharer_backlog: number;
+  recipient_backlog: number;
+  packed_sharer: number;
+  packed_recipient: number;
+}> {
+  if (!input.targetUserId || input.targetUserId === input.sharerId) {
+    throw new DraftingValidationError('Choose another user to share with');
+  }
+
+  const { rows: targetRows } = await dbQuery<{ id: string }>(
+    `SELECT id::text AS id FROM outreach.users WHERE id = $1::uuid`,
+    [input.targetUserId],
+  );
+  if (!targetRows[0]) {
+    throw new DraftingNotFoundError('Target user not found');
+  }
+
+  const sharerMovable = await loadMovableBacklog(input.sharerId);
+  const recipientMovable = await loadMovableBacklog(input.targetUserId);
+  const transferCount = computeShareTransferCount(
+    sharerMovable.length,
+    recipientMovable.length,
+  );
+  if (transferCount <= 0) {
+    throw new DraftingConflictError(
+      'Your backlog must be larger than theirs before you can share',
+      'share_not_needed',
+    );
+  }
+
+  // Furthest-out items first (loadMovableBacklog is DESC).
+  const toTransfer = sharerMovable.slice(0, transferCount);
+  for (const row of toTransfer) {
+    await dbQuery(
+      `UPDATE outreach.email_send_queue
+          SET owner_id = $2, updated_at = now()
+        WHERE id = $1 AND owner_id = $3 AND status IN ('queued', 'failed')`,
+      [row.id, input.targetUserId, input.sharerId],
+    );
+  }
+
+  const packed_sharer = await packOwnerSendQueue(input.sharerId);
+  const packed_recipient = await packOwnerSendQueue(input.targetUserId);
+
+  const sharerAfter = await loadMovableBacklog(input.sharerId);
+  const recipientAfter = await loadMovableBacklog(input.targetUserId);
+
+  return {
+    transferred: toTransfer.length,
+    sharer_backlog: sharerAfter.length,
+    recipient_backlog: recipientAfter.length,
+    packed_sharer,
+    packed_recipient,
   };
 }
 
@@ -1032,12 +1243,6 @@ export async function processQueuedEmailSend(queueId: string): Promise<{
   status: 'sent' | 'failed' | 'skipped';
   error?: string;
 }> {
-  if (await isBillingGuardTripped()) {
-    return {
-      status: 'skipped',
-      error: 'Billing guard fail-closed: cloud worker spend exceeded $0',
-    };
-  }
   const claimed = await dbTransaction(async (client) => {
     const locked = await client.query<EmailSendQueueRow>(
       `SELECT id, owner_id, drafting_item_id, campaign_id,

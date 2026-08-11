@@ -131,13 +131,33 @@ export function allocateOverflowSlots(input: {
   cap?: number;
   rng?: () => number;
 }): OverflowSlot[] {
+  return allocatePackedSlots({
+    count: input.count,
+    dayUsage: input.dayUsage,
+    startNy: addCalendarDays(input.todayNy, 1),
+    cap: input.cap,
+    rng: input.rng,
+  });
+}
+
+/**
+ * Pack `count` slots starting at `startNy` (often today), filling each day up
+ * to `cap` with random 9–5 NY times. Used after queue share to push work ASAP.
+ */
+export function allocatePackedSlots(input: {
+  count: number;
+  dayUsage: Map<string, number>;
+  startNy: string;
+  cap?: number;
+  rng?: () => number;
+}): OverflowSlot[] {
   const cap = input.cap ?? DAILY_SEND_CAP;
   const rng = input.rng ?? Math.random;
   const usage = new Map(input.dayUsage);
   const results: OverflowSlot[] = [];
   const timesByDay = new Map<string, Date[]>();
 
-  let day = addCalendarDays(input.todayNy, 1);
+  let day = input.startNy;
   for (let i = 0; i < input.count; i += 1) {
     while ((usage.get(day) ?? 0) >= cap) {
       day = addCalendarDays(day, 1);
@@ -150,6 +170,20 @@ export function allocateOverflowSlots(input: {
     results.push({ scheduleDate: day, scheduledFor });
   }
   return results;
+}
+
+/**
+ * How many backlog items the sharer should transfer so both end near equal.
+ * Returns 0 when the sharer does not have a larger backlog.
+ */
+export function computeShareTransferCount(
+  sharerBacklog: number,
+  recipientBacklog: number,
+): number {
+  if (sharerBacklog <= 0 || sharerBacklog <= recipientBacklog) return 0;
+  const total = sharerBacklog + recipientBacklog;
+  const targetEach = Math.floor(total / 2);
+  return Math.max(0, sharerBacklog - targetEach);
 }
 
 /** Remaining slots for a day given current usage. */

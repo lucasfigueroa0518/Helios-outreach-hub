@@ -119,15 +119,16 @@ gcloud compute ssh helios-orch-worker --zone=us-west1-a \
   --command='sudo mv /tmp/worker.env /opt/helios-worker/worker.env && sudo systemctl restart helios-worker'
 ```
 
-## Billing guard (fail-closed at > $0)
+## Cloud worker spend tracking
 
-If GCP reports any billable spend on the worker project, Outreach Hub trips a **billing guard**:
+GCP budget notifications feed **Analytics Hub** (Spend → Cloud worker (GCP)). Spend does
+**not** stop the orchestration worker or email sends — billable usage is expected so daily
+sends can run on the always-on VM.
 
 1. GCP Budget (`helios-worker-zero`, $0.01 with early thresholds) publishes to Pub/Sub topic `helios-billing-guard`.
 2. Push subscription hits `POST /api/webhooks/gcp-billing?token=…` on the production app.
-3. Hub writes `outreach.billing_guard` (`tripped = true`).
-4. The orchestration worker **stops claiming jobs** and email sends refuse new work (fail-closed).
-5. Hub home (`/hub`) shows a modal + persistent banner until acknowledged; clearing resume requires `BILLING_GUARD_CLEAR_SECRET`.
+3. Hub writes `outreach.billing_guard` with the latest reported `cost_amount` (`tripped` stays false).
+4. Analytics Hub shows that amount as infra spend (not attributed per campaign/lead).
 
 One-time wiring (from your Mac, with `gcloud` authenticated):
 
@@ -139,23 +140,15 @@ HELIOS_PUBLIC_URL=https://www.heliosgroup.tech ./scripts/gcp/setup-billing-guard
 Then put the same secrets on **Vercel production** (and keep them in `.env.local`):
 
 - `GCP_BILLING_WEBHOOK_TOKEN`
-- `BILLING_GUARD_CLEAR_SECRET`
+- `BILLING_GUARD_CLEAR_SECRET` (optional; only for clearing a leftover legacy fail-closed flag)
 
-Apply the table if needed: `npm run db:drafting`. Redeploy the app (webhook + Hub alert) and worker code (fail-closed claim loop). Until the app deploy lands, Pub/Sub push will get middleware `401` on `/api/webhooks/gcp-billing`.
-
-Clear after you confirm billing is back to $0:
-
-```bash
-curl -X POST "$HELIOS_PUBLIC_URL/api/billing-guard" \
-  -H "Cookie: <session>" \
-  -H "Content-Type: application/json" \
-  -H "x-billing-guard-clear: $BILLING_GUARD_CLEAR_SECRET" \
-  -d '{"action":"clear","confirm":true}'
-```
+Apply the table if needed: `npm run db:drafting`. Redeploy the app (webhook + Analytics Hub)
+and worker code. Until the app deploy lands, Pub/Sub push will get middleware `401` on
+`/api/webhooks/gcp-billing`.
 
 ## Cost / sleep notes
 
-- e2-micro in an Always Free region should stay **$0** for this single VM under Always Free limits.
+- The worker may incur normal GCP compute / network charges; track them in Analytics Hub.
 - Do **not** use a preemptible/spot VM for this — the queue needs a stable process.
 - Do **not** stop the VM overnight; stopped Always Free VMs are fine for disk, but backlog will not send while stopped.
 - Billing account may still be required on the GCP project even when usage is free.

@@ -101,8 +101,8 @@ export const DRAFTING_REQUIRED_COLUMNS: DraftingSchemaColumn[] = [
   },
   {
     table: 'outreach.billing_guard',
-    column: 'tripped',
-    reason: 'Fail-closed cloud worker when GCP billing exceeds $0',
+    column: 'cost_amount',
+    reason: 'Track GCP cloud worker spend for Analytics Hub',
   },
   {
     table: 'outreach.sender_profiles',
