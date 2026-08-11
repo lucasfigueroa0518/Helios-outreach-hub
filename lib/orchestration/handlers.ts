@@ -24,7 +24,10 @@ function child<K extends WorkKind>(
   payload: DispatchWork<K>['payload'],
   dedupeKey: string,
   scopeKey: string,
-  options: Pick<DispatchWork<K>, 'priority' | 'maxAttempts' | 'reviveTerminal'> = {},
+  options: Pick<
+    DispatchWork<K>,
+    'priority' | 'maxAttempts' | 'reviveTerminal' | 'availableAt'
+  > = {},
 ): DispatchWork<K> {
   return { kind, payload, dedupeKey, scopeKey, ...options };
 }
@@ -442,16 +445,52 @@ async function handleDraftingJob(
     '@/lib/drafting/transport'
   );
   const result = await processDraftingJob(job.payload.jobId);
-  const nextJobs = await loadPendingDraftingJobsByIds(result.nextJobIds);
-  const children: DispatchWork[] = nextJobs.map((draftingJob) =>
-    child(
-      orchKindForDraftingJobKind(draftingJob.kind),
-      { jobId: draftingJob.id },
-      draftingJob.id,
-      job.scope_key,
-      { reviveTerminal: true },
-    ),
-  );
+  const children: DispatchWork[] = [];
+
+  if (result.status === 'deferred') {
+    children.push(
+      child(
+        job.kind,
+        { jobId: job.payload.jobId },
+        job.payload.jobId,
+        job.scope_key,
+        {
+          reviveTerminal: true,
+          availableAt: result.retryAt ?? new Date(Date.now() + 15_000),
+        },
+      ),
+    );
+  } else {
+    const nextJobs = await loadPendingDraftingJobsByIds(result.nextJobIds);
+    for (const draftingJob of nextJobs) {
+      children.push(
+        child(
+          orchKindForDraftingJobKind(draftingJob.kind),
+          { jobId: draftingJob.id },
+          draftingJob.id,
+          job.scope_key,
+          { reviveTerminal: true },
+        ),
+      );
+    }
+    // P2-2: claim miss / pause skip while the drafting job is still pending —
+    // re-enqueue so orch "done" does not strand work.
+    if (result.status === 'skipped') {
+      const stillPending = await loadPendingDraftingJobsByIds([job.payload.jobId]);
+      if (stillPending[0]) {
+        children.push(
+          child(
+            orchKindForDraftingJobKind(stillPending[0].kind),
+            { jobId: stillPending[0].id },
+            stillPending[0].id,
+            job.scope_key,
+            { reviveTerminal: true },
+          ),
+        );
+      }
+    }
+  }
+
   return {
     children,
     result: {
@@ -495,6 +534,14 @@ async function handleEmailSend(
 ): Promise<WorkHandlerResult> {
   const { processQueuedEmailSend } = await import('@/lib/drafting/send-queue');
   const result = await processQueuedEmailSend(job.payload.queueId);
+  if (result.status === 'transient') {
+    // Clear transient Resend 429/5xx only — permanent failures stay for user Retry.
+    throw new RetryableWorkError(
+      result.error ?? 'Transient send failure',
+      Math.max(5_000, result.retryDelayMs ?? 15_000),
+      'resend_transient',
+    );
+  }
   // Permanent send failures stay on the queue row for user Retry; do not
   // burn orch retries on non-transient draft/config errors.
   return {
@@ -622,9 +669,17 @@ async function handleReconcile(
   // Also recover stranded mid-run items (laptop sleep / dead worker) that sit
   // outside idle reconcile states.
   let draftingRescued = 0;
+  let reservationsHealed = 0;
+  let companyLeasesExpired = 0;
   try {
     const { rescueActiveDraftingWorkspaces } = await import('@/lib/drafting/rescue');
-    const { wakeOrphanedParkedCompanyResearch } = await import('@/lib/drafting/repository');
+    const {
+      expireOveragedCompanyResearchLeases,
+      recomputeActiveRunReservations,
+      wakeOrphanedParkedCompanyResearch,
+    } = await import('@/lib/drafting/repository');
+    reservationsHealed = await recomputeActiveRunReservations(50).catch(() => 0);
+    companyLeasesExpired = await expireOveragedCompanyResearchLeases().catch(() => 0);
     draftingRescued = await rescueActiveDraftingWorkspaces();
     draftingRescued += await wakeOrphanedParkedCompanyResearch().catch(() => 0);
   } catch {
@@ -711,6 +766,8 @@ async function handleReconcile(
       interruptedRuns: interruptedRuns.rowCount ?? 0,
       draftingQueued,
       draftingRescued,
+      reservationsHealed,
+      companyLeasesExpired,
       draftingRunsFinalized,
       gatesWarmed,
       emailDeliveryReconciled,

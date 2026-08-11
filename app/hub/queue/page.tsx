@@ -5,5 +5,5 @@ import { getSession } from '@/lib/session';
 export default async function HubQueuePage() {
   const session = await getSession();
   if (!session) redirect('/');
-  return <SendQueueHub />;
+  return <SendQueueHub sessionUserId={session.userId} sessionEmail={session.email} />;
 }

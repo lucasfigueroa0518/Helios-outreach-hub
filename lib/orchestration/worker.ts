@@ -14,6 +14,7 @@ import {
   handleWork,
   markTerminalWorkFailure,
 } from '@/lib/orchestration/handlers';
+import { shouldYieldToPrimaryFleet } from '@/lib/orchestration/fleet';
 import {
   claimWork,
   completeWork,
@@ -21,6 +22,7 @@ import {
   failWork,
   heartbeatWork,
   heartbeatWorker,
+  reclaimExpiredOrchestrationLeases,
   registerWorker,
   orchestrationQueueStats,
   retryWork,
@@ -32,6 +34,9 @@ import {
   type OrchestrationJob,
   type WorkLane,
 } from '@/lib/orchestration/types';
+
+/** Product lanes that must not be starved by dashboards/maintenance on tiny concurrency. */
+const PRODUCT_LANES: WorkLane[] = ['drafting', 'drafting_write', 'email_send', 'mailbox_verify'];
 
 type LogFields = Record<string, unknown>;
 
@@ -87,9 +92,11 @@ export class OrchestrationWorker {
   private workerHeartbeatTimer: NodeJS.Timeout | null = null;
   private reconcileTimer: NodeJS.Timeout | null = null;
   private telemetryTimer: NodeJS.Timeout | null = null;
+  private reclaimTimer: NodeJS.Timeout | null = null;
   private laneCursor = 0;
   private activeByLane = new Map<WorkLane, number>();
   private stopPromise: Promise<number> | null = null;
+  private lastFleetYieldLogAt = 0;
 
   constructor(workerId = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`) {
     this.workerId = workerId;
@@ -180,6 +187,24 @@ export class OrchestrationWorker {
     }, 30_000);
     this.telemetryTimer.unref();
 
+    // Even when concurrency slots are full, expired leases must still reclaim.
+    this.reclaimTimer = setInterval(() => {
+      void reclaimExpiredOrchestrationLeases(25).then((reclaimed) => {
+        if (reclaimed > 0) {
+          log('warn', 'expired_lease_reclaim', {
+            workerId: this.workerId,
+            reclaimed,
+          });
+        }
+      }).catch((error) => {
+        log('warn', 'expired_lease_reclaim_failed', {
+          workerId: this.workerId,
+          error: errorMessage(error),
+        });
+      });
+    }, 15_000);
+    this.reclaimTimer.unref();
+
     this.schedulePoll(0);
   }
 
@@ -188,10 +213,41 @@ export class OrchestrationWorker {
     this.pollTimer = setTimeout(() => void this.poll(), delay);
   }
 
+  private beginJob(job: OrchestrationJob): void {
+    this.activeByLane.set(job.lane, (this.activeByLane.get(job.lane) ?? 0) + 1);
+    const execution = this.execute(job).finally(() => {
+      this.active.delete(job.id);
+      const remaining = Math.max(0, (this.activeByLane.get(job.lane) ?? 1) - 1);
+      if (remaining === 0) this.activeByLane.delete(job.lane);
+      else this.activeByLane.set(job.lane, remaining);
+    });
+    this.active.set(job.id, execution);
+  }
+
   private async poll(): Promise<void> {
     if (this.stopping) return;
     const maximum = workerMaxConcurrency();
     try {
+      if (await shouldYieldToPrimaryFleet(this.workerId)) {
+        const now = Date.now();
+        if (now - this.lastFleetYieldLogAt > 60_000) {
+          this.lastFleetYieldLogAt = now;
+          log('info', 'fleet_yield_to_primary', {
+            workerId: this.workerId,
+            primaryWorkerId: process.env.ORCHESTRATION_PRIMARY_WORKER_ID ?? null,
+          });
+        }
+        return;
+      }
+
+      // Phase 1 — reserved product-lane claims so drafting/sends are not starved.
+      for (const lane of PRODUCT_LANES) {
+        if (this.stopping || this.active.size >= maximum) break;
+        const job = await claimWork(lane, this.workerId);
+        if (job) this.beginJob(job);
+      }
+
+      // Phase 2 — round-robin remaining lanes to fill leftover concurrency.
       let checked = 0;
       while (!this.stopping && this.active.size < maximum && checked < WORK_LANES.length) {
         const lane = WORK_LANES[this.laneCursor % WORK_LANES.length] as WorkLane;
@@ -199,14 +255,7 @@ export class OrchestrationWorker {
         checked += 1;
         const job = await claimWork(lane, this.workerId);
         if (!job) continue;
-        this.activeByLane.set(job.lane, (this.activeByLane.get(job.lane) ?? 0) + 1);
-        const execution = this.execute(job).finally(() => {
-          this.active.delete(job.id);
-          const remaining = Math.max(0, (this.activeByLane.get(job.lane) ?? 1) - 1);
-          if (remaining === 0) this.activeByLane.delete(job.lane);
-          else this.activeByLane.set(job.lane, remaining);
-        });
-        this.active.set(job.id, execution);
+        this.beginJob(job);
       }
     } catch (error) {
       log('error', 'poll_failed', {
@@ -349,6 +398,10 @@ export class OrchestrationWorker {
     if (this.telemetryTimer) {
       clearInterval(this.telemetryTimer);
       this.telemetryTimer = null;
+    }
+    if (this.reclaimTimer) {
+      clearInterval(this.reclaimTimer);
+      this.reclaimTimer = null;
     }
 
     try {

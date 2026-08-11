@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 
 import { draftingErrorResponse, draftingJson } from '@/lib/drafting/api';
+import { resolveQueueOwnerId } from '@/lib/drafting/queue-owner';
 import {
   cancelSendQueueItems,
   formatNyDate,
@@ -23,13 +24,18 @@ export async function GET(request: NextRequest) {
   const campaignId = url.searchParams.get('campaign_id');
 
   try {
+    const ownerId = await resolveQueueOwnerId(session.userId, url.searchParams.get('user_id'));
     const result = await listSendQueue({
-      ownerId: session.userId,
+      ownerId,
       from,
       to,
       campaignId,
     });
-    return draftingJson(result);
+    return draftingJson({
+      ...result,
+      owner_id: ownerId,
+      viewing_other: ownerId !== session.userId,
+    });
   } catch (error) {
     return draftingErrorResponse(error);
   }
@@ -39,7 +45,7 @@ export async function PATCH(request: NextRequest) {
   const session = await getSession();
   if (!session) return draftingJson({ error: 'Unauthorized' }, 401);
 
-  let body: { ids?: string[]; target_date?: string };
+  let body: { ids?: string[]; target_date?: string; user_id?: string };
   try {
     body = await request.json();
   } catch {
@@ -54,8 +60,9 @@ export async function PATCH(request: NextRequest) {
   }
 
   try {
+    const ownerId = await resolveQueueOwnerId(session.userId, body.user_id);
     const result = await moveSendQueueItems({
-      ownerId: session.userId,
+      ownerId,
       ids: body.ids,
       targetDate: body.target_date,
     });
@@ -69,7 +76,7 @@ export async function DELETE(request: NextRequest) {
   const session = await getSession();
   if (!session) return draftingJson({ error: 'Unauthorized' }, 401);
 
-  let body: { ids?: string[] };
+  let body: { ids?: string[]; user_id?: string };
   try {
     body = await request.json();
   } catch {
@@ -81,8 +88,9 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
+    const ownerId = await resolveQueueOwnerId(session.userId, body.user_id);
     const result = await cancelSendQueueItems({
-      ownerId: session.userId,
+      ownerId,
       ids: body.ids,
     });
     return draftingJson(result);

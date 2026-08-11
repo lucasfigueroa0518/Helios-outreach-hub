@@ -14,6 +14,8 @@ type QueueListResponse = {
   days: QueueDayBucket[];
   today: string;
   today_remaining: number;
+  owner_id?: string;
+  viewing_other?: boolean;
 };
 
 type QueueDetailResponse = {
@@ -23,9 +25,18 @@ type QueueDetailResponse = {
 };
 
 type CampaignOption = { id: string; name: string };
+type UserOption = { id: string; email: string; display_name: string };
 
-export function SendQueueHub() {
+export function SendQueueHub({
+  sessionUserId,
+  sessionEmail,
+}: {
+  sessionUserId: string;
+  sessionEmail: string;
+}) {
   const [data, setData] = useState<QueueListResponse | null>(null);
+  const [users, setUsers] = useState<UserOption[]>([]);
+  const [viewUserId, setViewUserId] = useState('');
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
   const [campaignId, setCampaignId] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -42,11 +53,17 @@ export function SendQueueHub() {
   const shareMenuRef = useRef<HTMLDivElement>(null);
   const hasDataRef = useRef(false);
 
+  const ownerPayload = useMemo(
+    () => (viewUserId ? { user_id: viewUserId } : {}),
+    [viewUserId],
+  );
+
   const load = useCallback(async (force = false) => {
     if (!hasDataRef.current) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (campaignId) params.set('campaign_id', campaignId);
+      if (viewUserId) params.set('user_id', viewUserId);
       const qs = params.toString();
       const url = `/api/send-queue${qs ? `?${qs}` : ''}`;
       const result = await hubGetJson<QueueListResponse>(url, { force });
@@ -58,17 +75,28 @@ export function SendQueueHub() {
     } finally {
       setLoading(false);
     }
-  }, [campaignId]);
+  }, [campaignId, viewUserId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    void hubGetJson<{ campaigns: CampaignOption[] }>('/api/campaigns')
+    void hubGetJson<{ users: UserOption[] }>('/api/users')
+      .then((res) => setUsers(res.users))
+      .catch(() => setUsers([]));
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (viewUserId) params.set('user_id', viewUserId);
+    const qs = params.toString();
+    void hubGetJson<{ campaigns: CampaignOption[] }>(`/api/campaigns${qs ? `?${qs}` : ''}`, {
+      force: true,
+    })
       .then((res) => setCampaigns(res.campaigns.map((c) => ({ id: c.id, name: c.name }))))
       .catch(() => setCampaigns([]));
-  }, []);
+  }, [viewUserId]);
 
   useEffect(() => {
     if (!shareOpen) return;
@@ -94,7 +122,10 @@ export function SendQueueHub() {
       return;
     }
     let cancelled = false;
-    void requestJson<QueueDetailResponse>(`/api/send-queue/${detailId}`)
+    const params = new URLSearchParams();
+    if (viewUserId) params.set('user_id', viewUserId);
+    const qs = params.toString();
+    void requestJson<QueueDetailResponse>(`/api/send-queue/${detailId}${qs ? `?${qs}` : ''}`)
       .then((res) => {
         if (!cancelled) setDetail(res);
       })
@@ -107,7 +138,7 @@ export function SendQueueHub() {
     return () => {
       cancelled = true;
     };
-  }, [detailId]);
+  }, [detailId, viewUserId]);
 
   const selectedItems = useMemo(() => {
     if (!data) return [];
@@ -123,6 +154,16 @@ export function SendQueueHub() {
 
   const canRetry = selectedItems.length > 0
     && selectedItems.every((i) => i.status === 'failed');
+
+  const otherUsers = useMemo(
+    () => users.filter((user) => user.id !== sessionUserId),
+    [users, sessionUserId],
+  );
+
+  const viewingUser = useMemo(
+    () => (viewUserId ? users.find((user) => user.id === viewUserId) ?? null : null),
+    [users, viewUserId],
+  );
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -182,7 +223,7 @@ export function SendQueueHub() {
       await requestJson('/api/send-queue', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids, target_date: targetDate }),
+        body: JSON.stringify({ ids, target_date: targetDate, ...ownerPayload }),
       });
       setMessage(`Moved ${ids.length} to ${formatNyDateLabel(targetDate)}`);
     });
@@ -201,7 +242,12 @@ export function SendQueueHub() {
     setShareOpen(true);
     setShareLoading(true);
     try {
-      const result = await requestJson<{ users: ShareTargetUser[] }>('/api/send-queue/share-targets');
+      const params = new URLSearchParams();
+      if (viewUserId) params.set('user_id', viewUserId);
+      const qs = params.toString();
+      const result = await requestJson<{ users: ShareTargetUser[] }>(
+        `/api/send-queue/share-targets${qs ? `?${qs}` : ''}`,
+      );
       setShareTargets(result.users);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load teammates');
@@ -221,13 +267,24 @@ export function SendQueueHub() {
       }>('/api/send-queue/share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_user_id: target.id }),
+        body: JSON.stringify({ target_user_id: target.id, ...ownerPayload }),
       });
       setShareTargets(null);
       setMessage(
         `Pushed ${result.transferred} to ${target.email} · you ${result.sharer_backlog} · them ${result.recipient_backlog}`,
       );
     });
+  }
+
+  function onViewUserChange(nextUserId: string) {
+    setViewUserId(nextUserId);
+    setCampaignId('');
+    setSelected(new Set());
+    setDetailId(null);
+    setShareOpen(false);
+    setShareTargets(null);
+    setMessage(null);
+    hasDataRef.current = false;
   }
 
   if (loading && !data) {
@@ -241,7 +298,9 @@ export function SendQueueHub() {
           <div>
             <div className="card__title">Send queue</div>
             <div className="card__subtitle">
-              20 emails/day · America/New_York · drag to move by day
+              {viewingUser
+                ? `Viewing ${viewingUser.email} · 20 emails/day · America/New_York`
+                : `${sessionEmail} · 20 emails/day · America/New_York · drag to move by day`}
             </div>
           </div>
         </div>
@@ -254,6 +313,24 @@ export function SendQueueHub() {
               </span>
               <span>Backlog: <strong>{backlogCount}</strong></span>
             </div>
+            <label className="send-queue-filter">
+              <span>User</span>
+              <select
+                value={viewUserId}
+                onChange={(e) => onViewUserChange(e.target.value)}
+                className="field__input"
+              >
+                <option value="">My queue ({sessionEmail})</option>
+                {otherUsers.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.email}
+                    {user.display_name && user.display_name !== user.email
+                      ? ` · ${user.display_name}`
+                      : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="send-queue-filter">
               <span>Campaign</span>
               <select
@@ -329,7 +406,7 @@ export function SendQueueHub() {
                   const result = await requestJson<{ sent: number }>('/api/send-queue/send-now', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ids: [...selected] }),
+                    body: JSON.stringify({ ids: [...selected], ...ownerPayload }),
                   });
                   setMessage(`Sent ${result.sent} now`);
                 })}
@@ -346,7 +423,7 @@ export function SendQueueHub() {
                     {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ ids: [...selected] }),
+                      body: JSON.stringify({ ids: [...selected], ...ownerPayload }),
                     },
                   );
                   setMessage(`Retry: ${result.sent_now} sent · ${result.requeued} requeued`);
@@ -362,7 +439,7 @@ export function SendQueueHub() {
                   const result = await requestJson<{ cancelled: number }>('/api/send-queue', {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ids: [...selected] }),
+                    body: JSON.stringify({ ids: [...selected], ...ownerPayload }),
                   });
                   setMessage(`Cancelled ${result.cancelled}`);
                 })}

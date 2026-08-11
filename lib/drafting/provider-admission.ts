@@ -18,8 +18,9 @@ function positiveInt(name: string, fallback: number, maximum = 100): number {
   return Math.max(1, Math.min(maximum, Math.floor(parsed)));
 }
 
+/** Single ceiling shared by lane admission and the process Anthropic semaphore. */
 export function resolveAnthropicMaxInflight(): number {
-  return positiveInt('DRAFTING_ANTHROPIC_MAX_INFLIGHT', 24, 32);
+  return positiveInt('DRAFTING_ANTHROPIC_MAX_INFLIGHT', 8, 12);
 }
 
 export function draftingResearchConcurrencyCeiling(): number {
@@ -98,4 +99,13 @@ export function isProviderPressureError(message: string): boolean {
     || /\b529\b/.test(message)
     || /rate.?limit/i.test(message)
     || /overloaded/i.test(message);
+}
+
+/** Transient Resend / network failures safe for orch RetryableWorkError only. */
+export function isTransientSendError(message: string): boolean {
+  if (isProviderPressureError(message)) return true;
+  return /\b5\d\d\b/.test(message)
+    || /timeout/i.test(message)
+    || /ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(message)
+    || /temporarily unavailable|try again later/i.test(message);
 }

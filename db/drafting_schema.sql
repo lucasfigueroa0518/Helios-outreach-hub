@@ -721,7 +721,10 @@ BEGIN
           FROM outreach.drafting_jobs AS j
          WHERE j.id = p_job_id
            AND (
-             j.status = 'pending'
+             (
+               j.status = 'pending'
+               AND j.next_attempt_at <= now()
+             )
              OR (
                j.status = 'in_flight'
                AND coalesce(j.heartbeat_at, j.claimed_at) < now() - interval '10 minutes'
@@ -925,6 +928,17 @@ BEGIN
            finished_at = now()
      WHERE j.id = p_job_id
      RETURNING j.* INTO v_job;
+
+    -- Release this job's reservation from the run. Actual spend lives in
+    -- drafting_runs.actual_cost_usd via cost events; remaining budget is
+    -- limit − open-job reserved − actual. Without this release, finished
+    -- jobs double-count and campaigns false-pause at scale.
+    UPDATE outreach.drafting_runs AS r
+       SET reserved_cost_usd = GREATEST(
+             0::numeric,
+             r.reserved_cost_usd - coalesce(v_job.reserved_cost_usd, 0::numeric)
+           )
+     WHERE r.id = v_job.drafting_run_id;
 
     RETURN v_job;
 END;

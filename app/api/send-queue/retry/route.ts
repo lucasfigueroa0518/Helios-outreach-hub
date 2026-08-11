@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 
 import { draftingErrorResponse, draftingJson } from '@/lib/drafting/api';
+import { resolveQueueOwnerId } from '@/lib/drafting/queue-owner';
 import { retryFailedQueueItems } from '@/lib/drafting/send-queue';
 import { getSession } from '@/lib/session';
 
@@ -10,7 +11,7 @@ export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session) return draftingJson({ error: 'Unauthorized' }, 401);
 
-  let body: { ids?: string[] };
+  let body: { ids?: string[]; user_id?: string };
   try {
     body = await request.json();
   } catch {
@@ -22,8 +23,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const ownerId = await resolveQueueOwnerId(session.userId, body.user_id);
     const result = await retryFailedQueueItems({
-      ownerId: session.userId,
+      ownerId,
       ids: body.ids,
     });
     return draftingJson(result);

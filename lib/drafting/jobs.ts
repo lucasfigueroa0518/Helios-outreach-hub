@@ -53,6 +53,7 @@ import {
   claimDraftingJob,
   failOpenRemainingDraftingMailboxVerifies,
   findReusableCompanyResearch,
+  deferDraftingJobForRetry,
   finishCompanyResearchLease,
   finishDraftingJob,
   heartbeatCompanyResearchLease,
@@ -74,6 +75,8 @@ import {
   type DraftingRun,
   type ReusableCompanyResearchMatch,
 } from '@/lib/drafting/repository';
+import { isProviderPressureError } from '@/lib/drafting/provider-admission';
+import { jitteredBackoffMs } from '@/lib/orchestration/config';
 import { assertTransition, TransitionConflictError } from '@/lib/drafting/state';
 import {
   assessResearchTimeliness,
@@ -226,10 +229,12 @@ async function ledgerDraftingItemCost(itemId: string): Promise<void> {
 
 export type ProcessDraftingJobResult = {
   jobId: string;
-  status: 'claimed' | 'skipped' | 'done' | 'failed' | 'superseded' | 'cancelled';
+  status: 'claimed' | 'skipped' | 'done' | 'failed' | 'superseded' | 'cancelled' | 'deferred';
   nextJobIds: string[];
   errorCode?: string;
   errorMessage?: string;
+  /** When status is deferred, orch should revive this job after this time. */
+  retryAt?: Date;
 };
 
 function isStaleJob(
@@ -642,6 +647,25 @@ async function handleResearch(jobId: string): Promise<ProcessDraftingJobResult> 
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // In-flight 429/529 only — do not put research_provider_error on the
+    // auto-reconcile path (NON_AUTO_RETRY_ERROR_CODES stays authoritative).
+    if (isProviderPressureError(message)) {
+      const delayMs = jitteredBackoffMs(Math.max(1, job.attempt_count));
+      const retryAt = await deferDraftingJobForRetry({
+        jobId,
+        delayMs,
+        errorCode: 'anthropic_pressure',
+        errorMessage: message,
+      });
+      return {
+        jobId,
+        status: 'deferred',
+        nextJobIds: [jobId],
+        errorCode: 'anthropic_pressure',
+        errorMessage: message,
+        retryAt,
+      };
+    }
     if (ownedCompanyKey) {
       await finishCompanyResearchLease({
         workspaceId: item.workspace_id,
@@ -1102,6 +1126,24 @@ async function persistDraftFromProvider(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isProviderPressureError(message)) {
+      const context = await loadDraftingJobContext(jobId);
+      const delayMs = jitteredBackoffMs(Math.max(1, context?.job.attempt_count ?? 1));
+      const retryAt = await deferDraftingJobForRetry({
+        jobId,
+        delayMs,
+        errorCode: 'anthropic_pressure',
+        errorMessage: message,
+      });
+      return {
+        jobId,
+        status: 'deferred',
+        nextJobIds: [jobId],
+        errorCode: 'anthropic_pressure',
+        errorMessage: message,
+        retryAt,
+      };
+    }
     const failedState = options.isRewrite ? 'failed_rewrite' : 'failed_write';
     await dbTransaction(async (client) => {
       await transitionItemState(client, item.id, failedState, true);

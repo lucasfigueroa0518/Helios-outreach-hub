@@ -478,8 +478,14 @@ export async function draftingOperationalSnapshot(): Promise<{
   };
 }
 
-export async function resetBackingPendingWork(): Promise<DispatchWork[]> {
+/** Cap orphan fan-out per reconcile tick so maintenance cannot enqueue thousands. */
+export const RECONCILE_ORPHAN_FANOUT_LIMIT = 75;
+
+export async function resetBackingPendingWork(
+  limitPerKind = RECONCILE_ORPHAN_FANOUT_LIMIT,
+): Promise<DispatchWork[]> {
   const works: DispatchWork[] = [];
+  const pageLimit = Math.max(1, Math.min(500, Math.floor(limitPerKind)));
 
   // Reclaim pending + orphaned in_flight research (worker died after claim;
   // orch job already terminal). Without this, enriching runs hang forever.
@@ -489,16 +495,23 @@ export async function resetBackingPendingWork(): Promise<DispatchWork[]> {
             claimed_at = NULL,
             last_error = coalesce(last_error, 'reclaimed_stale_in_flight'),
             updated_at = now()
-      WHERE crj.status = 'in_flight'
-        AND crj.claimed_at < now() - interval '10 minutes'
-        AND crj.attempt_count < 5
-        AND NOT EXISTS (
-          SELECT 1
-            FROM outreach.orchestration_jobs oj
-           WHERE oj.dedupe_key = crj.id::text
-             AND oj.kind IN ('research.company', 'research.profile_rescue', 'research.email_rescue')
-             AND oj.status IN ('pending', 'in_flight')
-        )`,
+      WHERE crj.id IN (
+        SELECT crj2.id
+          FROM outreach.company_research_jobs AS crj2
+         WHERE crj2.status = 'in_flight'
+           AND crj2.claimed_at < now() - interval '10 minutes'
+           AND crj2.attempt_count < 5
+           AND NOT EXISTS (
+             SELECT 1
+               FROM outreach.orchestration_jobs oj
+              WHERE oj.dedupe_key = crj2.id::text
+                AND oj.kind IN ('research.company', 'research.profile_rescue', 'research.email_rescue')
+                AND oj.status IN ('pending', 'in_flight')
+           )
+         ORDER BY crj2.claimed_at ASC NULLS FIRST
+         LIMIT $1
+      )`,
+    [pageLimit],
   );
 
   const research = await dbQuery<{ id: string; job_kind: string; requested_by_runs: string[] }>(
@@ -512,7 +525,10 @@ export async function resetBackingPendingWork(): Promise<DispatchWork[]> {
            WHERE oj.dedupe_key = crj.id::text
              AND oj.kind IN ('research.company', 'research.profile_rescue', 'research.email_rescue')
              AND oj.status IN ('pending', 'in_flight')
-        )`,
+        )
+      ORDER BY crj.updated_at ASC NULLS FIRST, crj.created_at ASC
+      LIMIT $1`,
+    [pageLimit],
   );
   for (const row of research.rows) {
     const kind: WorkKind = row.job_kind === 'profile_rescue'
@@ -545,7 +561,10 @@ export async function resetBackingPendingWork(): Promise<DispatchWork[]> {
            WHERE oj.dedupe_key = dj.id::text
              AND oj.kind LIKE 'drafting.job.%'
              AND oj.status IN ('pending', 'in_flight')
-        )`,
+        )
+      ORDER BY dj.priority DESC, dj.next_attempt_at ASC, dj.created_at ASC
+      LIMIT $1`,
+    [pageLimit],
   );
   for (const row of drafting.rows) {
     const kind: WorkKind = row.kind === 'verify_mailbox'
@@ -563,4 +582,41 @@ export async function resetBackingPendingWork(): Promise<DispatchWork[]> {
   }
 
   return works;
+}
+
+/** Reset expired/orphaned in-flight orch leases even when the worker is saturated. */
+export async function reclaimExpiredOrchestrationLeases(limit = 50): Promise<number> {
+  const { rowCount } = await dbQuery(
+    `WITH stale AS (
+       SELECT candidate.id
+         FROM outreach.orchestration_jobs AS candidate
+        WHERE candidate.status = 'in_flight'
+          AND candidate.attempt_count < candidate.max_attempts
+          AND (
+            candidate.lease_expires_at <= now()
+            OR candidate.lease_owner IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+                FROM outreach.orchestration_workers worker
+               WHERE worker.worker_id = candidate.lease_owner
+                 AND worker.heartbeat_at > now() - interval '45 seconds'
+            )
+          )
+        ORDER BY candidate.lease_expires_at ASC NULLS FIRST
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+     )
+     UPDATE outreach.orchestration_jobs AS job
+        SET status = 'pending',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            heartbeat_at = NULL,
+            last_error_code = 'lease_expired',
+            last_error_message = coalesce(last_error_message, 'reclaimed while worker saturated'),
+            updated_at = now()
+       FROM stale
+      WHERE job.id = stale.id`,
+    [Math.max(1, Math.min(200, Math.floor(limit)))],
+  );
+  return rowCount ?? 0;
 }

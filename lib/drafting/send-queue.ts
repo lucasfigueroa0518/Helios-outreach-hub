@@ -110,17 +110,53 @@ async function recordEmailSend(input: {
   );
 }
 
+/**
+ * Sends that consume this queue owner's daily cap.
+ * Attribution is by email_send_queue.owner_id (the mailbox/queue in front of
+ * you), not campaign.owner_id — Push-to moves capacity with the queue.
+ * Immediate under-cap sends with no queue row still charge the sender.
+ */
+const SENT_FOR_OWNER_SQL = `
+  FROM outreach.email_sends s
+ WHERE s.status = 'sent'
+   AND s.sent_at IS NOT NULL
+   AND (
+     EXISTS (
+       SELECT 1
+         FROM outreach.email_send_queue q
+        WHERE q.drafting_item_id = s.drafting_item_id
+          AND q.owner_id = $1
+     )
+     OR (
+       NOT EXISTS (
+         SELECT 1
+           FROM outreach.email_send_queue q
+          WHERE q.drafting_item_id = s.drafting_item_id
+       )
+       AND (
+         EXISTS (
+           SELECT 1
+             FROM outreach.sender_profiles sp
+            WHERE sp.user_id = $1
+              AND lower(sp.work_email) = lower(s.from_email)
+         )
+         OR EXISTS (
+           SELECT 1
+             FROM outreach.drafting_items i
+             JOIN outreach.drafting_workspaces w ON w.id = i.workspace_id
+             JOIN outreach.campaigns c ON c.id = w.campaign_id
+            WHERE i.id = s.drafting_item_id
+              AND c.owner_id = $1
+         )
+       )
+     )
+   )`;
+
 export async function countSentOnNyDate(ownerId: string, scheduleDate: string): Promise<number> {
   const { rows } = await dbQuery<{ count: number }>(
     `SELECT count(*)::int AS count
-       FROM outreach.email_sends s
-       JOIN outreach.drafting_items i ON i.id = s.drafting_item_id
-       JOIN outreach.drafting_workspaces w ON w.id = i.workspace_id
-       JOIN outreach.campaigns c ON c.id = w.campaign_id
-      WHERE c.owner_id = $1
-        AND s.status = 'sent'
-        AND s.sent_at IS NOT NULL
-        AND (timezone($3, s.sent_at))::date = $2::date`,
+     ${SENT_FOR_OWNER_SQL}
+       AND (timezone($3, s.sent_at))::date = $2::date`,
     [ownerId, scheduleDate, SEND_QUEUE_TIMEZONE],
   );
   return Number(rows[0]?.count ?? 0);
@@ -159,15 +195,9 @@ export async function dayUsageForOwner(
 
   const sent = await dbQuery<{ schedule_date: string; count: number }>(
     `SELECT (timezone($3, s.sent_at))::date::text AS schedule_date, count(*)::int AS count
-       FROM outreach.email_sends s
-       JOIN outreach.drafting_items i ON i.id = s.drafting_item_id
-       JOIN outreach.drafting_workspaces w ON w.id = i.workspace_id
-       JOIN outreach.campaigns c ON c.id = w.campaign_id
-      WHERE c.owner_id = $1
-        AND s.status = 'sent'
-        AND s.sent_at IS NOT NULL
-        AND (timezone($3, s.sent_at))::date >= $2::date
-      GROUP BY 1`,
+     ${SENT_FOR_OWNER_SQL}
+       AND (timezone($3, s.sent_at))::date >= $2::date
+     GROUP BY 1`,
     [ownerId, fromDate, SEND_QUEUE_TIMEZONE],
   );
   for (const row of sent.rows) {
@@ -397,7 +427,13 @@ export async function executeImmediateResend(input: {
   companyName?: string | null;
   senderProfileId?: string | null;
   headshotStoragePath?: string | null;
-}): Promise<{ status: 'sent' | 'failed'; providerMessageId?: string; error?: string }> {
+}): Promise<{
+  status: 'sent' | 'failed';
+  providerMessageId?: string;
+  error?: string;
+  transient?: boolean;
+}> {
+  const { isTransientSendError } = await import('@/lib/drafting/provider-admission');
   const toEmail = resolveSendToEmail(input.campaignId, input.toEmail);
   try {
     const result = await sendOutreachEmail({
@@ -434,6 +470,10 @@ export async function executeImmediateResend(input: {
     return { status: 'sent', providerMessageId: result.providerMessageId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isTransientSendError(message)) {
+      // Do not persist a terminal send failure for orch-level 429/5xx retries.
+      return { status: 'failed', error: message, transient: true };
+    }
     await recordEmailSend({
       itemId: input.itemId,
       status: 'failed',
@@ -767,13 +807,19 @@ export async function shareSendQueueWithUser(input: {
 
   // Furthest-out items first (loadMovableBacklog is DESC).
   const toTransfer = sharerMovable.slice(0, transferCount);
-  for (const row of toTransfer) {
-    await dbQuery(
-      `UPDATE outreach.email_send_queue
-          SET owner_id = $2, updated_at = now()
-        WHERE id = $1 AND owner_id = $3 AND status IN ('queued', 'failed')`,
-      [row.id, input.targetUserId, input.sharerId],
-    );
+  const transferIds = toTransfer.map((row) => row.id);
+  // Atomic ownership flip — avoid partial shares if the process dies mid-loop.
+  const { rowCount: transferredRows } = await dbQuery(
+    `UPDATE outreach.email_send_queue
+        SET owner_id = $2, updated_at = now()
+      WHERE id = ANY($1::uuid[])
+        AND owner_id = $3
+        AND status IN ('queued', 'failed')`,
+    [transferIds, input.targetUserId, input.sharerId],
+  );
+  const transferred = transferredRows ?? 0;
+  if (transferred === 0) {
+    throw new DraftingConflictError('No queue items could be transferred', 'share_empty');
   }
 
   const packed_sharer = await packOwnerSendQueue(input.sharerId);
@@ -783,7 +829,7 @@ export async function shareSendQueueWithUser(input: {
   const recipientAfter = await loadMovableBacklog(input.targetUserId);
 
   return {
-    transferred: toTransfer.length,
+    transferred,
     sharer_backlog: sharerAfter.length,
     recipient_backlog: recipientAfter.length,
     packed_sharer,
@@ -1238,11 +1284,17 @@ export async function retryFailedQueueItems(input: {
   };
 }
 
+const STALE_SENDING_RECLAIM_MINUTES = 15;
+
 /** Worker entry: deliver one queued email when its orch job becomes available. */
 export async function processQueuedEmailSend(queueId: string): Promise<{
-  status: 'sent' | 'failed' | 'skipped';
+  status: 'sent' | 'failed' | 'skipped' | 'transient';
   error?: string;
+  retryDelayMs?: number;
 }> {
+  const { isTransientSendError } = await import('@/lib/drafting/provider-admission');
+  const { jitteredBackoffMs } = await import('@/lib/orchestration/config');
+
   const claimed = await dbTransaction(async (client) => {
     const locked = await client.query<EmailSendQueueRow>(
       `SELECT id, owner_id, drafting_item_id, campaign_id,
@@ -1260,14 +1312,28 @@ export async function processQueuedEmailSend(queueId: string): Promise<{
       return { skip: true as const, row };
     }
     if (row.status === 'sending') {
-      return { skip: true as const, row };
+      // Allow reclaim of crash-stuck sends; fresh sending stays skipped.
+      const stale = await client.query<{ stale: boolean }>(
+        `SELECT (updated_at < now() - make_interval(mins => $2)) AS stale
+           FROM outreach.email_send_queue
+          WHERE id = $1`,
+        [queueId, STALE_SENDING_RECLAIM_MINUTES],
+      );
+      if (!stale.rows[0]?.stale) {
+        return { skip: true as const, row };
+      }
     }
-    if (row.status !== 'queued' && row.status !== 'failed') {
+    if (row.status !== 'queued' && row.status !== 'failed' && row.status !== 'sending') {
       return { skip: true as const, row };
     }
     await client.query(
       `UPDATE outreach.email_send_queue
-          SET status = 'sending', updated_at = now()
+          SET status = 'sending',
+              error_message = CASE
+                WHEN status = 'sending' THEN 'reclaimed_stale_sending'
+                ELSE error_message
+              END,
+              updated_at = now()
         WHERE id = $1`,
       [queueId],
     );
@@ -1318,19 +1384,70 @@ export async function processQueuedEmailSend(queueId: string): Promise<{
     return { status: 'sent' };
   }
 
+  const errorMessage = sendResult.error ?? 'Send failed';
+  if (sendResult.transient || isTransientSendError(errorMessage)) {
+    // Put back to queued so orch RetryableWorkError can re-deliver; do not
+    // leave status=sending or mark a permanent user-facing failure.
+    await dbQuery(
+      `UPDATE outreach.email_send_queue
+          SET status = 'queued',
+              error_message = $2,
+              updated_at = now()
+        WHERE id = $1`,
+      [queueId, errorMessage.slice(0, 1000)],
+    );
+    return {
+      status: 'transient',
+      error: errorMessage,
+      retryDelayMs: jitteredBackoffMs(1),
+    };
+  }
+
   await dbQuery(
     `UPDATE outreach.email_send_queue
         SET status = 'failed',
             error_message = $2,
             updated_at = now()
       WHERE id = $1`,
-    [queueId, sendResult.error ?? 'Send failed'],
+    [queueId, errorMessage],
   );
   return { status: 'failed', error: sendResult.error };
 }
 
-/** Reconcile: revive overdue queued rows missing a live orch job. */
+/** Reconcile: revive overdue queued rows + reclaim crash-stuck sending rows. */
 export async function reconcileEmailSendQueue(limit = 50): Promise<number> {
+  const pageLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+
+  // Crash mid-send: free the daily slot and revive orch delivery.
+  const staleSending = await dbQuery<{ id: string; scheduled_for: string }>(
+    `SELECT q.id, q.scheduled_for::text
+       FROM outreach.email_send_queue q
+      WHERE q.status = 'sending'
+        AND q.updated_at < now() - make_interval(mins => $2)
+        AND (
+          q.orchestration_job_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+              FROM outreach.orchestration_jobs oj
+             WHERE oj.id = q.orchestration_job_id
+               AND oj.status IN ('pending', 'in_flight')
+          )
+        )
+      ORDER BY q.updated_at ASC
+      LIMIT $1`,
+    [pageLimit, STALE_SENDING_RECLAIM_MINUTES],
+  );
+  for (const row of staleSending.rows) {
+    await dbQuery(
+      `UPDATE outreach.email_send_queue
+          SET status = 'queued',
+              error_message = coalesce(error_message, 'reclaimed_stale_sending'),
+              updated_at = now()
+        WHERE id = $1 AND status = 'sending'`,
+      [row.id],
+    );
+  }
+
   const { rows } = await dbQuery<{ id: string; scheduled_for: string }>(
     `SELECT q.id, q.scheduled_for::text
        FROM outreach.email_send_queue q
@@ -1346,7 +1463,7 @@ export async function reconcileEmailSendQueue(limit = 50): Promise<number> {
         )
       ORDER BY q.scheduled_for ASC
       LIMIT $1`,
-    [limit],
+    [pageLimit],
   );
 
   let revived = 0;

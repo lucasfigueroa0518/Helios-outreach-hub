@@ -2,16 +2,18 @@
  * Process-local cap on concurrent Anthropic drafting calls (research + adversarial + write).
  * Prevents RPM/TPM storms when lane concurrency is raised. On 429, callers should backoff
  * and optionally call `shrinkDraftingAnthropicLimit()`.
+ *
+ * Ceiling matches lane admission via resolveAnthropicMaxInflight().
  */
+
+import { resolveAnthropicMaxInflight } from '@/lib/drafting/provider-admission';
 
 const RESTORE_QUIET_MS = 30_000;
 const RESTORE_STEP_MS = 5_000;
 const SHRINK_PRESSURE_WINDOW_MS = 30_000;
 
 function resolveLimit(): number {
-  const parsed = Number(process.env.DRAFTING_ANTHROPIC_MAX_INFLIGHT ?? 8);
-  if (!Number.isFinite(parsed)) return 8;
-  return Math.max(1, Math.min(12, Math.floor(parsed)));
+  return resolveAnthropicMaxInflight();
 }
 
 let limit = resolveLimit();

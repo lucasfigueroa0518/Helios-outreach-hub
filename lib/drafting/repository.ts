@@ -3151,6 +3151,67 @@ export async function finishDraftingJob(input: {
   return rows[0] ?? null;
 }
 
+/**
+ * Defer an in-flight drafting job for a transient provider retry without
+ * releasing its reservation or marking a terminal research_provider_error.
+ */
+export async function deferDraftingJobForRetry(input: {
+  jobId: string;
+  delayMs: number;
+  errorCode: string;
+  errorMessage: string;
+}): Promise<Date> {
+  const delaySeconds = Math.max(1, Math.ceil(input.delayMs / 1000));
+  const { rows } = await dbQuery<{ next_attempt_at: string }>(
+    `UPDATE outreach.drafting_jobs
+        SET status = 'pending',
+            claimed_at = NULL,
+            heartbeat_at = NULL,
+            next_attempt_at = now() + make_interval(secs => $2::double precision),
+            last_error_code = $3,
+            last_error_message = $4,
+            usage = outreach.drafting_jobs.usage || jsonb_build_object(
+              'transientDeferAt', now(),
+              'transientDeferCode', $3::text
+            )
+      WHERE id = $1
+        AND status = 'in_flight'
+      RETURNING next_attempt_at::text`,
+    [
+      input.jobId,
+      delaySeconds,
+      input.errorCode,
+      input.errorMessage.slice(0, 1000),
+    ],
+  );
+  const next = rows[0]?.next_attempt_at;
+  return next ? new Date(next) : new Date(Date.now() + input.delayMs);
+}
+
+/** Heal run reserved totals from open jobs only (pending/in_flight). */
+export async function recomputeActiveRunReservations(limit = 50): Promise<number> {
+  const { rowCount } = await dbQuery(
+    `WITH targets AS (
+       SELECT id
+         FROM outreach.drafting_runs
+        WHERE status = 'active'
+        ORDER BY started_at DESC
+        LIMIT $1
+     )
+     UPDATE outreach.drafting_runs AS r
+        SET reserved_cost_usd = coalesce((
+              SELECT sum(j.reserved_cost_usd)
+                FROM outreach.drafting_jobs j
+               WHERE j.drafting_run_id = r.id
+                 AND j.status IN ('pending', 'in_flight')
+            ), 0::numeric)
+       FROM targets t
+      WHERE r.id = t.id`,
+    [limit],
+  );
+  return rowCount ?? 0;
+}
+
 type DraftingCostEventQuery = (
   text: string,
   params: unknown[],
@@ -3279,6 +3340,7 @@ export async function claimCompanyResearchLease(input: {
          WHEN leases.owner_item_id = EXCLUDED.owner_item_id
            OR leases.status <> 'researching'
            OR leases.lease_expires_at <= now()
+           OR leases.created_at <= now() - interval '45 minutes'
          THEN EXCLUDED.owner_item_id
          ELSE leases.owner_item_id
        END,
@@ -3286,13 +3348,28 @@ export async function claimCompanyResearchLease(input: {
          WHEN leases.owner_item_id = EXCLUDED.owner_item_id
            OR leases.status <> 'researching'
            OR leases.lease_expires_at <= now()
+           OR leases.created_at <= now() - interval '45 minutes'
          THEN 'researching'
          ELSE leases.status
+       END,
+       created_at = CASE
+         WHEN leases.owner_item_id = EXCLUDED.owner_item_id
+           AND leases.status = 'researching'
+           AND leases.lease_expires_at > now()
+           AND leases.created_at > now() - interval '45 minutes'
+         THEN leases.created_at
+         WHEN leases.owner_item_id = EXCLUDED.owner_item_id
+           OR leases.status <> 'researching'
+           OR leases.lease_expires_at <= now()
+           OR leases.created_at <= now() - interval '45 minutes'
+         THEN now()
+         ELSE leases.created_at
        END,
        lease_expires_at = CASE
          WHEN leases.owner_item_id = EXCLUDED.owner_item_id
            OR leases.status <> 'researching'
            OR leases.lease_expires_at <= now()
+           OR leases.created_at <= now() - interval '45 minutes'
          THEN now() + interval '15 minutes'
          ELSE leases.lease_expires_at
        END,
@@ -3300,6 +3377,7 @@ export async function claimCompanyResearchLease(input: {
          WHEN leases.owner_item_id = EXCLUDED.owner_item_id
            OR leases.status <> 'researching'
            OR leases.lease_expires_at <= now()
+           OR leases.created_at <= now() - interval '45 minutes'
          THEN now()
          ELSE leases.updated_at
        END
@@ -3500,6 +3578,9 @@ export async function wakeParkedCompanyResearchSiblings(input: {
   return nextJobIds;
 }
 
+/** Hard ceiling so a hung Anthropic call cannot renew a company lease forever. */
+export const COMPANY_RESEARCH_LEASE_MAX_AGE_MINUTES = 45;
+
 export async function heartbeatCompanyResearchLease(input: {
   workspaceId: string;
   itemId: string;
@@ -3512,9 +3593,29 @@ export async function heartbeatCompanyResearchLease(input: {
       WHERE workspace_id = $1
         AND company_key = $2
         AND owner_item_id = $3
-        AND status = 'researching'`,
-    [input.workspaceId, input.companyKey, input.itemId],
+        AND status = 'researching'
+        AND created_at > now() - make_interval(mins => $4)`,
+    [
+      input.workspaceId,
+      input.companyKey,
+      input.itemId,
+      COMPANY_RESEARCH_LEASE_MAX_AGE_MINUTES,
+    ],
   );
+}
+
+/** Expire researching leases past the hard max age so parked siblings can wake. */
+export async function expireOveragedCompanyResearchLeases(): Promise<number> {
+  const { rowCount } = await dbQuery(
+    `UPDATE outreach.drafting_company_research_leases
+        SET status = 'failed',
+            lease_expires_at = now(),
+            updated_at = now()
+      WHERE status = 'researching'
+        AND created_at <= now() - make_interval(mins => $1)`,
+    [COMPANY_RESEARCH_LEASE_MAX_AGE_MINUTES],
+  );
+  return rowCount ?? 0;
 }
 
 export async function loadDraftingJobContext(jobId: string): Promise<{
@@ -3831,7 +3932,7 @@ export async function queueJob(
       && input.reviveTerminal
       && ['failed', 'cancelled', 'superseded'].includes(row.status)
     ) {
-      const revived = await client.query<{ id: string }>(
+      const revived = await client.query<{ id: string; reserved_cost_usd: string }>(
         `UPDATE outreach.drafting_jobs
             SET status = 'pending',
                 claimed_at = NULL,
@@ -3846,14 +3947,26 @@ export async function queueJob(
                 ),
                 execution_epoch = outreach.drafting_jobs.execution_epoch + 1
           WHERE id = $1
-          RETURNING id`,
+          RETURNING id, reserved_cost_usd::text`,
         [
           row.id,
           input.nextAttemptAt ?? new Date(),
           JSON.stringify(input.usage ?? {}),
         ],
       );
-      return revived.rows[0]?.id ?? null;
+      const revivedRow = revived.rows[0];
+      if (!revivedRow) return null;
+      // finish_drafting_job released the prior reservation; re-reserve on revive.
+      const reviveReserve = Number(revivedRow.reserved_cost_usd);
+      if (Number.isFinite(reviveReserve) && reviveReserve > 0) {
+        await client.query(
+          `UPDATE outreach.drafting_runs
+              SET reserved_cost_usd = reserved_cost_usd + $2::numeric
+            WHERE id = $1`,
+          [input.runId, revivedRow.reserved_cost_usd],
+        );
+      }
+      return revivedRow.id;
     }
     return row && ['pending', 'in_flight'].includes(row.status) ? row.id : null;
   }
