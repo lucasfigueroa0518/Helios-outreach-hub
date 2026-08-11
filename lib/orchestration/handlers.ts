@@ -794,14 +794,15 @@ export async function markTerminalWorkFailure(
 }
 
 export async function enqueueReconciliation(reason: string): Promise<void> {
-  const bucket = Math.floor(Date.now() / 30_000);
+  // Stable dedupe — a 30s bucket key used to stack thousands of pending
+  // reconciles whenever the worker was fail-closed / offline.
   await enqueueWorkBatch([
     child(
       'system.reconcile',
       { reason },
-      String(bucket),
+      'system-reconcile',
       'system',
-      { maxAttempts: 3 },
+      { maxAttempts: 3, reviveTerminal: true },
     ),
   ]);
 }

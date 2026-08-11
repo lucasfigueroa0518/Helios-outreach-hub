@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { CalendarClock, Send, Share2, Trash2, RotateCcw, X } from 'lucide-react';
+import { CalendarClock, Send, SquareSplitVertical, Trash2, RotateCcw, X } from 'lucide-react';
 
 import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
 import { HubLoadingSpinner } from '@/app/hub/hub-loading';
@@ -225,7 +225,7 @@ export function SendQueueHub() {
       });
       setShareTargets(null);
       setMessage(
-        `Shared ${result.transferred} with ${target.email} · you ${result.sharer_backlog} · them ${result.recipient_backlog}`,
+        `Pushed ${result.transferred} to ${target.email} · you ${result.sharer_backlog} · them ${result.recipient_backlog}`,
       );
     });
   }
@@ -277,12 +277,12 @@ export function SendQueueHub() {
                   aria-haspopup="menu"
                   onClick={() => void openShareMenu()}
                 >
-                  <Share2 size={14} /> Share
+                  <SquareSplitVertical size={14} aria-hidden="true" /> Push to
                 </button>
                 {shareOpen ? (
                   <div className="send-queue-share__menu" role="menu">
                     <div className="send-queue-share__hint">
-                      Equalize backlog with a teammate. Both queues pack to the earliest open days.
+                      Split backlog evenly with a teammate. Both queues pack to the earliest open days.
                     </div>
                     {shareLoading || !shareTargets ? (
                       <p className="send-queue-share__empty">Loading teammates…</p>

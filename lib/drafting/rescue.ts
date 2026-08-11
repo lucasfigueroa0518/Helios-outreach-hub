@@ -614,13 +614,13 @@ export async function rescueDraftingWorkspace(
   }
 
   // Kick the periodic reconciler so enrichment/mailbox siblings also heal.
-  const bucket = Math.floor(Date.now() / 30_000);
   await enqueueWorkBatch([{
     kind: 'system.reconcile',
     payload: { reason: 'user_rescue' },
-    dedupeKey: String(bucket),
+    dedupeKey: 'system-reconcile',
     scopeKey: 'system',
     maxAttempts: 3,
+    reviveTerminal: true,
   }]).catch(() => undefined);
 
   const assessment = await assessDraftingRescue(workspaceId);
