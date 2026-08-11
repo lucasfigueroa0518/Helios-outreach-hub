@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { signOut } from 'next-auth/react';
 
 type Props = {
@@ -17,20 +16,13 @@ export function ProductChooser({ email }: Props) {
         <span className="login-page__grid" />
       </div>
 
-      <section className="login-page__stage product-chooser__stage" aria-label="Choose a product">
+      <section className="login-page__stage product-chooser__stage" aria-label="Helios home">
         <h1 className="login-page__brand">
           <span className="login-page__brand-line">Helios</span>
         </h1>
-        <p className="product-chooser__lede">Where do you want to go?</p>
-
-        <div className="product-chooser__actions">
-          <Link href="/dashboards" className="login-page__cta product-chooser__cta">
-            Dashboards
-          </Link>
-          <Link href="/hub" className="login-page__cta product-chooser__cta">
-            Outreach Hub
-          </Link>
-        </div>
+        <p className="product-chooser__lede">
+          Open the menu to jump into Outreach or Project Dashboards.
+        </p>
 
         <p className="product-chooser__meta">
           <span>{email}</span>

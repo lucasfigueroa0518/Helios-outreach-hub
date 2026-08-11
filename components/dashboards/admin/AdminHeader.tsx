@@ -18,7 +18,7 @@ export default function AdminHeader({ email }: { email: string }) {
     <header className="dashboards-admin-header">
       <div className="dashboards-admin-header__inner">
         <div className="dashboards-admin-header__left">
-          <Link href="/" className="dashboards-admin-header__brand" aria-label="Back to Helios">
+          <div className="dashboards-admin-header__brand">
             <Image
               src="/dashboards/helios-logo.png"
               alt="Helios"
@@ -28,7 +28,7 @@ export default function AdminHeader({ email }: { email: string }) {
               priority
             />
             <span className="dashboards-admin-header__product">Dashboards</span>
-          </Link>
+          </div>
 
           <nav className="dashboards-admin-header__nav" aria-label="Dashboards">
             {NAV.map((item) => {

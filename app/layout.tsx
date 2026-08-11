@@ -1,5 +1,9 @@
 import { Roboto } from 'next/font/google';
 import localFont from 'next/font/local';
+
+import { SiteProductMenu } from '@/app/site-product-menu';
+import { getSession } from '@/lib/session';
+
 import './globals.css';
 import './components.css';
 
@@ -23,10 +27,15 @@ export const metadata = {
   description: 'Outreach Hub — lead enrichment for Embark',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const session = await getSession();
+
   return (
     <html lang="en" className={`${roboto.variable} ${pragmatica.variable}`}>
-      <body>{children}</body>
+      <body className={session ? 'has-site-product-menu' : undefined}>
+        {session ? <SiteProductMenu /> : null}
+        {children}
+      </body>
     </html>
   );
 }
