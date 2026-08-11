@@ -48,7 +48,7 @@ export function SiteProductMenu() {
         aria-controls={menuId}
         onClick={() => setOpen((value) => !value)}
       >
-        {open ? <X size={18} strokeWidth={2.25} aria-hidden="true" /> : <Menu size={18} strokeWidth={2.25} aria-hidden="true" />}
+        {open ? <X size={36} strokeWidth={2.25} aria-hidden="true" /> : <Menu size={36} strokeWidth={2.25} aria-hidden="true" />}
       </button>
 
       <div
