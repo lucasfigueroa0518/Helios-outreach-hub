@@ -3,6 +3,14 @@
  * and individual lead/email item rows for any selected statistic.
  */
 
+import {
+  completeUtcDaysInWindow,
+  loadAnthropicBilledBreakdown,
+  loadAnthropicBilledByModel,
+  loadAnthropicBilledDaily,
+  loadAttributedCostByCampaign,
+  loadAttributedCostDaily,
+} from '@/lib/analytics-attributed-cost';
 import { dbQuery } from '@/lib/db';
 import { resolveAnalyticsWindow } from '@/lib/analytics';
 
@@ -71,12 +79,15 @@ function formatCount(num: number | null | undefined): string {
   return num.toLocaleString();
 }
 
-async function loadExcludedLeadIds(): Promise<string[]> {
-  const { rows: runRows } = await dbQuery<{ run_id: string }>(
+async function loadExcludedRunIds(): Promise<string[]> {
+  const { rows } = await dbQuery<{ run_id: string }>(
     `SELECT run_id::text AS run_id FROM outreach.analytics_run_exclusions`,
   );
-  if (!runRows.length) return [];
-  const runIds = runRows.map((r) => r.run_id);
+  return rows.map((r) => r.run_id);
+}
+
+async function loadExcludedLeadIds(excludedRunIds: string[]): Promise<string[]> {
+  if (!excludedRunIds.length) return [];
   const { rows } = await dbQuery<{ lead_id: string }>(
     `SELECT DISTINCT cl.lead_id::text AS lead_id
        FROM outreach.campaign_leads cl
@@ -85,20 +96,36 @@ async function loadExcludedLeadIds(): Promise<string[]> {
      SELECT DISTINCT l.id::text AS lead_id
        FROM outreach.leads l
       WHERE l.source_run_id = ANY($1::uuid[])`,
-    [runIds],
+    [excludedRunIds],
   );
   return rows.map((r) => r.lead_id);
 }
 
+function attributedDayTotal(row: {
+  enrichment_cost: string;
+  drafting_cost: string;
+  replies_cost: string;
+  extraction_cost: string;
+  dashboards_cost: string;
+}): number {
+  return (
+    Number(row.enrichment_cost)
+    + Number(row.drafting_cost)
+    + Number(row.replies_cost)
+    + Number(row.extraction_cost)
+    + Number(row.dashboards_cost)
+  );
+}
+
 export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promise<AnalyticsDrilldownData> {
   const window = resolveAnalyticsWindow(input);
-  const excludedLeads = await loadExcludedLeadIds();
+  const excludedRunIds = await loadExcludedRunIds();
+  const excludedLeads = await loadExcludedLeadIds(excludedRunIds);
 
   const cleanCampaignIds = input.campaignIds?.filter(Boolean) ?? [];
   const cleanTags = input.tags?.map((t) => t.trim().toLowerCase()).filter(Boolean) ?? [];
   const cleanUserId = input.userId?.trim() || null;
 
-  // Resolve matching campaign IDs
   const { rows: matchingCampaigns } = await dbQuery<{ id: string; name: string }>(
     `SELECT c.id::text AS id, c.name
        FROM outreach.campaigns c
@@ -112,164 +139,137 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
 
   const campaignIds = matchingCampaigns.map((c) => c.id);
   const safeCampaignIds = campaignIds.length ? campaignIds : ['00000000-0000-0000-0000-000000000000'];
-
   const metricKey = input.metricKey || 'total_spend';
+  const billedDays = completeUtcDaysInWindow(window);
+
+  if (metricKey === 'anthropic_billed' || metricKey === 'spend_variance') {
+    return billedDrilldown(metricKey, window, billedDays, safeCampaignIds, excludedLeads, excludedRunIds);
+  }
 
   let title = 'Statistic Overview';
   let unit: 'usd' | 'percent' | 'count' = 'usd';
   let totalFormatted = '—';
 
-  // 1. Daily Trend Points query
-  const { rows: dailyRows } = await dbQuery<{
-    day: string;
-    total_cost: string;
-    enrichment_cost: string;
-    drafting_cost: string;
-    sent_count: string;
-    delivered_count: string;
-    opened_count: string;
-    clicked_count: string;
-    replied_count: string;
-  }>(
-    `WITH days AS (
-       SELECT generate_series($1::timestamptz, $2::timestamptz, interval '1 day')::date AS day
-     ),
-     cost_daily AS (
-       SELECT date_trunc('day', created_at)::date AS day,
-              sum(actual_cost_usd) AS enrichment_cost,
-              0::numeric AS drafting_cost
-         FROM outreach.lead_cost_events e
-        WHERE e.created_at >= $1::timestamptz AND e.created_at <= $2::timestamptz
-          AND e.phase = 'enrichment'
-          AND e.campaign_id = ANY($3::uuid[])
-          AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR e.lead_id <> ALL($4::uuid[]))
-        GROUP BY 1
-       UNION ALL
-       SELECT date_trunc('day', event.created_at)::date AS day,
-              0::numeric AS enrichment_cost,
-              sum(event.actual_cost_usd) AS drafting_cost
-         FROM outreach.drafting_job_cost_events event
-         JOIN outreach.drafting_items item ON item.id = event.drafting_item_id
-         JOIN outreach.drafting_workspaces workspace ON workspace.id = item.workspace_id
-        WHERE event.created_at >= $1::timestamptz AND event.created_at <= $2::timestamptz
-          AND workspace.campaign_id = ANY($3::uuid[])
-          AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR item.lead_id <> ALL($4::uuid[]))
-        GROUP BY 1
-       UNION ALL
-       SELECT date_trunc('day', occurred_at)::date AS day,
-              0::numeric AS enrichment_cost,
-              sum(actual_cost_usd) AS drafting_cost
-         FROM outreach.drafting_run_cost_opening_balances opening
-        WHERE occurred_at >= $1::timestamptz AND occurred_at <= $2::timestamptz
-          AND campaign_id = ANY($3::uuid[])
-        GROUP BY 1
-     ),
-     send_daily AS (
-       SELECT date_trunc('day', i.updated_at)::date AS day,
-              count(*) FILTER (WHERE i.delivery_snapshot ? 'sentAt' OR i.delivery_snapshot ? 'gmailMessageId' OR s.status = 'sent') AS sent_count,
-              count(*) FILTER (WHERE s.delivered_at IS NOT NULL) AS delivered_count,
-              count(*) FILTER (WHERE s.opened_at IS NOT NULL) AS opened_count,
-              count(*) FILTER (WHERE s.clicked_at IS NOT NULL) AS clicked_count,
-              count(*) FILTER (WHERE s.replied_at IS NOT NULL) AS replied_count
-         FROM outreach.drafting_items i
-         JOIN outreach.drafting_workspaces w ON w.id = i.workspace_id
-         LEFT JOIN outreach.email_sends s ON s.drafting_item_id = i.id AND s.status = 'sent'
-        WHERE i.updated_at >= $1::timestamptz AND i.updated_at <= $2::timestamptz
-          AND w.campaign_id = ANY($3::uuid[])
-          AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR i.lead_id <> ALL($4::uuid[]))
-        GROUP BY 1
-     )
-     SELECT d.day::text AS day,
-            coalesce(sum(c.enrichment_cost + c.drafting_cost), 0)::text AS total_cost,
-            coalesce(sum(c.enrichment_cost), 0)::text AS enrichment_cost,
-            coalesce(sum(c.drafting_cost), 0)::text AS drafting_cost,
-            coalesce(sum(s.sent_count), 0)::text AS sent_count,
-            coalesce(sum(s.delivered_count), 0)::text AS delivered_count,
-            coalesce(sum(s.opened_count), 0)::text AS opened_count,
-            coalesce(sum(s.clicked_count), 0)::text AS clicked_count,
-            coalesce(sum(s.replied_count), 0)::text AS replied_count
-       FROM days d
-  LEFT JOIN cost_daily c ON c.day = d.day
-  LEFT JOIN send_daily s ON s.day = d.day
-   GROUP BY d.day
-   ORDER BY d.day ASC`,
-    [window.from, window.to, safeCampaignIds, excludedLeads.length ? excludedLeads : null],
-  );
+  const [dailyCost, sendDaily] = await Promise.all([
+    loadAttributedCostDaily({
+      from: window.from,
+      to: window.to,
+      campaignIds: safeCampaignIds,
+      excludedLeadIds: excludedLeads,
+      excludedRunIds,
+    }),
+    dbQuery<{
+      day: string;
+      sent_count: string;
+      delivered_count: string;
+      opened_count: string;
+      clicked_count: string;
+      replied_count: string;
+    }>(
+      `WITH days AS (
+         SELECT generate_series($1::timestamptz, $2::timestamptz, interval '1 day')::date AS day
+       ),
+       send_daily AS (
+         SELECT date_trunc('day', i.updated_at)::date AS day,
+                count(*) FILTER (WHERE i.delivery_snapshot ? 'sentAt' OR i.delivery_snapshot ? 'gmailMessageId' OR s.status = 'sent') AS sent_count,
+                count(*) FILTER (WHERE s.delivered_at IS NOT NULL) AS delivered_count,
+                count(*) FILTER (WHERE s.opened_at IS NOT NULL) AS opened_count,
+                count(*) FILTER (WHERE s.clicked_at IS NOT NULL) AS clicked_count,
+                count(*) FILTER (WHERE s.replied_at IS NOT NULL) AS replied_count
+           FROM outreach.drafting_items i
+           JOIN outreach.drafting_workspaces w ON w.id = i.workspace_id
+           LEFT JOIN outreach.email_sends s ON s.drafting_item_id = i.id AND s.status = 'sent'
+          WHERE i.updated_at >= $1::timestamptz AND i.updated_at <= $2::timestamptz
+            AND w.campaign_id = ANY($3::uuid[])
+            AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR i.lead_id <> ALL($4::uuid[]))
+          GROUP BY 1
+       )
+       SELECT d.day::text AS day,
+              coalesce(s.sent_count, 0)::text AS sent_count,
+              coalesce(s.delivered_count, 0)::text AS delivered_count,
+              coalesce(s.opened_count, 0)::text AS opened_count,
+              coalesce(s.clicked_count, 0)::text AS clicked_count,
+              coalesce(s.replied_count, 0)::text AS replied_count
+         FROM days d
+    LEFT JOIN send_daily s ON s.day = d.day
+     ORDER BY d.day ASC`,
+      [window.from, window.to, safeCampaignIds, excludedLeads.length ? excludedLeads : null],
+    ),
+  ]);
 
-  const trend: DailyTrendPoint[] = dailyRows.map((r) => {
-    let val = 0;
-    const sent = Number(r.sent_count);
-    const deliv = Number(r.delivered_count);
-    const totalC = Number(r.total_cost);
+  const sendByDay = new Map(sendDaily.rows.map((r) => [r.day, r]));
+  const trend: DailyTrendPoint[] = dailyCost.map((r) => {
+    const send = sendByDay.get(r.day);
+    const sent = Number(send?.sent_count ?? 0);
+    const deliv = Number(send?.delivered_count ?? 0);
+    const totalC = attributedDayTotal(r);
     const draftC = Number(r.drafting_cost);
     const enrichC = Number(r.enrichment_cost);
-
-    if (metricKey === 'spend_per_lead' || metricKey === 'total_spend') val = totalC;
+    let val = 0;
+    if (metricKey === 'spend_per_lead' || metricKey === 'total_spend' || metricKey === 'hub_attributed') val = totalC;
     else if (metricKey === 'cost_per_drafting' || metricKey === 'aggregated_drafting') val = draftC;
     else if (metricKey === 'cost_per_enrichment' || metricKey === 'aggregated_enrichment') val = enrichC;
     else if (metricKey === 'delivery_rate') val = sent > 0 ? deliv / sent : 0;
-    else if (metricKey === 'open_rate') val = deliv > 0 ? Number(r.opened_count) / deliv : 0;
-    else if (metricKey === 'click_rate') val = deliv > 0 ? Number(r.clicked_count) / deliv : 0;
-    else if (metricKey === 'reply_rate') val = deliv > 0 ? Number(r.replied_count) / deliv : 0;
+    else if (metricKey === 'open_rate') val = deliv > 0 ? Number(send?.opened_count ?? 0) / deliv : 0;
+    else if (metricKey === 'click_rate') val = deliv > 0 ? Number(send?.clicked_count ?? 0) / deliv : 0;
+    else if (metricKey === 'reply_rate') val = deliv > 0 ? Number(send?.replied_count ?? 0) / deliv : 0;
     else if (metricKey === 'emails_sent') val = sent;
-    else if (metricKey === 'campaigns_count') val = safeCampaignIds.length;
-
-    return {
-      date: r.day,
-      value: val,
-    };
+    else if (metricKey === 'campaigns_count') val = safeCampaignIds[0] === '00000000-0000-0000-0000-000000000000' ? 0 : safeCampaignIds.length;
+    return { date: r.day, value: val };
   });
 
-  // 2. Campaign breakdown query
-  const { rows: campRows } = await dbQuery<{
-    campaign_id: string;
-    campaign_name: string;
-    lead_count: string;
-    emails_sent: string;
-    emails_delivered: string;
-    emails_opened: string;
-    emails_clicked: string;
-    emails_replied: string;
-    enrichment_cost: string;
-    drafting_cost: string;
-  }>(
-    `SELECT c.id::text AS campaign_id,
-            c.name AS campaign_name,
-            coalesce((SELECT count(DISTINCT cl.lead_id)::text FROM outreach.campaign_leads cl WHERE cl.campaign_id = c.id), '0') AS lead_count,
-            coalesce(sum(CASE WHEN i.delivery_snapshot ? 'sentAt' OR i.delivery_snapshot ? 'gmailMessageId' OR s.status = 'sent' THEN 1 ELSE 0 END), 0)::text AS emails_sent,
-            coalesce(sum(CASE WHEN s.delivered_at IS NOT NULL THEN 1 ELSE 0 END), 0)::text AS emails_delivered,
-            coalesce(sum(CASE WHEN s.opened_at IS NOT NULL THEN 1 ELSE 0 END), 0)::text AS emails_opened,
-            coalesce(sum(CASE WHEN s.clicked_at IS NOT NULL THEN 1 ELSE 0 END), 0)::text AS emails_clicked,
-            coalesce(sum(CASE WHEN s.replied_at IS NOT NULL THEN 1 ELSE 0 END), 0)::text AS emails_replied,
-            coalesce((
-              SELECT sum(e.actual_cost_usd)::text FROM outreach.lead_cost_events e
-               WHERE e.campaign_id = c.id AND e.created_at >= $1::timestamptz AND e.created_at <= $2::timestamptz AND e.phase = 'enrichment'
-            ), '0') AS enrichment_cost,
-            coalesce((
-              SELECT sum(event.actual_cost_usd)::text FROM outreach.drafting_job_cost_events event
-                JOIN outreach.drafting_items item ON item.id = event.drafting_item_id
-                JOIN outreach.drafting_workspaces workspace ON workspace.id = item.workspace_id
-               WHERE workspace.campaign_id = c.id AND event.created_at >= $1::timestamptz AND event.created_at <= $2::timestamptz
-            ), '0') AS drafting_cost
-       FROM outreach.campaigns c
-  LEFT JOIN outreach.drafting_workspaces w ON w.campaign_id = c.id
-  LEFT JOIN outreach.drafting_items i ON i.workspace_id = w.id AND i.updated_at >= $1::timestamptz AND i.updated_at <= $2::timestamptz
-  LEFT JOIN outreach.email_sends s ON s.drafting_item_id = i.id AND s.status = 'sent'
-      WHERE c.id = ANY($3::uuid[])
-   GROUP BY c.id, c.name`,
-    [window.from, window.to, safeCampaignIds],
-  );
+  const [campRows, costByCampaign] = await Promise.all([
+    dbQuery<{
+      campaign_id: string;
+      campaign_name: string;
+      lead_count: string;
+      emails_sent: string;
+      emails_delivered: string;
+      emails_opened: string;
+      emails_clicked: string;
+      emails_replied: string;
+    }>(
+      `SELECT c.id::text AS campaign_id,
+              c.name AS campaign_name,
+              coalesce((SELECT count(DISTINCT cl.lead_id)::text FROM outreach.campaign_leads cl WHERE cl.campaign_id = c.id), '0') AS lead_count,
+              coalesce(sum(CASE WHEN i.delivery_snapshot ? 'sentAt' OR i.delivery_snapshot ? 'gmailMessageId' OR s.status = 'sent' THEN 1 ELSE 0 END), 0)::text AS emails_sent,
+              coalesce(sum(CASE WHEN s.delivered_at IS NOT NULL THEN 1 ELSE 0 END), 0)::text AS emails_delivered,
+              coalesce(sum(CASE WHEN s.opened_at IS NOT NULL THEN 1 ELSE 0 END), 0)::text AS emails_opened,
+              coalesce(sum(CASE WHEN s.clicked_at IS NOT NULL THEN 1 ELSE 0 END), 0)::text AS emails_clicked,
+              coalesce(sum(CASE WHEN s.replied_at IS NOT NULL THEN 1 ELSE 0 END), 0)::text AS emails_replied
+         FROM outreach.campaigns c
+    LEFT JOIN outreach.drafting_workspaces w ON w.campaign_id = c.id
+    LEFT JOIN outreach.drafting_items i ON i.workspace_id = w.id AND i.updated_at >= $1::timestamptz AND i.updated_at <= $2::timestamptz
+    LEFT JOIN outreach.email_sends s ON s.drafting_item_id = i.id AND s.status = 'sent'
+        WHERE c.id = ANY($3::uuid[])
+     GROUP BY c.id, c.name`,
+      [window.from, window.to, safeCampaignIds],
+    ),
+    loadAttributedCostByCampaign({
+      from: window.from,
+      to: window.to,
+      campaignIds: safeCampaignIds,
+      excludedLeadIds: excludedLeads,
+      excludedRunIds,
+    }),
+  ]);
 
-  const campaigns: DrilldownCampaignRow[] = campRows.map((r) => {
+  const costMap = new Map(costByCampaign.map((row) => [row.campaign_id, row]));
+
+  const campaigns: DrilldownCampaignRow[] = campRows.rows.map((r) => {
     const lCount = Number(r.lead_count);
     const sent = Number(r.emails_sent);
     const deliv = Number(r.emails_delivered);
     const opened = Number(r.emails_opened);
     const clicked = Number(r.emails_clicked);
     const replied = Number(r.emails_replied);
-    const enrichC = Number(r.enrichment_cost);
-    const draftC = Number(r.drafting_cost);
-    const totalS = enrichC + draftC;
+    const cost = costMap.get(r.campaign_id);
+    const enrichC = Number(cost?.enrichment_cost ?? 0);
+    const draftC = Number(cost?.drafting_cost ?? 0);
+    const repliesC = Number(cost?.replies_cost ?? 0);
+    const extractC = Number(cost?.extraction_cost ?? 0);
+    const enrichJobs = Number(cost?.enrichment_jobs ?? 0);
+    const totalS = enrichC + draftC + repliesC + extractC;
 
     let val = 0;
     let fmt = '—';
@@ -287,7 +287,7 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     } else if (metricKey === 'cost_per_enrichment') {
       title = 'Cost Per Enrichment';
       unit = 'usd';
-      val = lCount > 0 ? enrichC / lCount : 0;
+      val = enrichJobs > 0 ? enrichC / enrichJobs : 0;
       fmt = formatUsd(val);
     } else if (metricKey === 'aggregated_drafting') {
       title = 'Aggregated Drafting Cost';
@@ -299,8 +299,8 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
       unit = 'usd';
       val = enrichC;
       fmt = formatUsd(val);
-    } else if (metricKey === 'total_spend') {
-      title = 'Total Campaign Spend';
+    } else if (metricKey === 'total_spend' || metricKey === 'hub_attributed') {
+      title = metricKey === 'hub_attributed' ? 'Hub Attributed Claude' : 'Total Campaign Spend';
       unit = 'usd';
       val = totalS;
       fmt = formatUsd(val);
@@ -350,28 +350,31 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     };
   }).sort((a, b) => b.metric_value - a.metric_value);
 
-  // Set total formatted summary based on overall aggregate counts across campaigns
-  const totalLeads = campRows.reduce((acc, r) => acc + Number(r.lead_count), 0);
-  const totalSent = campRows.reduce((acc, r) => acc + Number(r.emails_sent), 0);
-  const totalDelivered = campRows.reduce((acc, r) => acc + Number(r.emails_delivered), 0);
-  const totalOpened = campRows.reduce((acc, r) => acc + Number(r.emails_opened), 0);
-  const totalClicked = campRows.reduce((acc, r) => acc + Number(r.emails_clicked), 0);
-  const totalReplied = campRows.reduce((acc, r) => acc + Number(r.emails_replied), 0);
-  const totalEnrichmentCost = campRows.reduce((acc, r) => acc + Number(r.enrichment_cost), 0);
-  const totalDraftingCost = campRows.reduce((acc, r) => acc + Number(r.drafting_cost), 0);
-  const totalSpend = totalEnrichmentCost + totalDraftingCost;
+  const totalLeads = campRows.rows.reduce((acc, r) => acc + Number(r.lead_count), 0);
+  const totalSent = campRows.rows.reduce((acc, r) => acc + Number(r.emails_sent), 0);
+  const totalDelivered = campRows.rows.reduce((acc, r) => acc + Number(r.emails_delivered), 0);
+  const totalOpened = campRows.rows.reduce((acc, r) => acc + Number(r.emails_opened), 0);
+  const totalClicked = campRows.rows.reduce((acc, r) => acc + Number(r.emails_clicked), 0);
+  const totalReplied = campRows.rows.reduce((acc, r) => acc + Number(r.emails_replied), 0);
+  const totalEnrichmentCost = costByCampaign.reduce((acc, r) => acc + Number(r.enrichment_cost), 0);
+  const totalDraftingCost = costByCampaign.reduce((acc, r) => acc + Number(r.drafting_cost), 0);
+  const totalReplyCost = costByCampaign.reduce((acc, r) => acc + Number(r.replies_cost), 0);
+  const totalExtractionCost = costByCampaign.reduce((acc, r) => acc + Number(r.extraction_cost), 0);
+  const totalEnrichmentJobs = costByCampaign.reduce((acc, r) => acc + Number(r.enrichment_jobs), 0);
+  const dashboardCost = dailyCost.reduce((acc, r) => acc + Number(r.dashboards_cost), 0);
+  const totalSpend = totalEnrichmentCost + totalDraftingCost + totalReplyCost + totalExtractionCost + dashboardCost;
 
   if (metricKey === 'spend_per_lead') {
     totalFormatted = totalLeads > 0 ? formatUsd(totalSpend / totalLeads) : '$0.00';
   } else if (metricKey === 'cost_per_drafting') {
     totalFormatted = totalSent > 0 ? formatUsd(totalDraftingCost / totalSent) : '$0.00';
   } else if (metricKey === 'cost_per_enrichment') {
-    totalFormatted = totalLeads > 0 ? formatUsd(totalEnrichmentCost / totalLeads) : '$0.00';
+    totalFormatted = totalEnrichmentJobs > 0 ? formatUsd(totalEnrichmentCost / totalEnrichmentJobs) : '$0.00';
   } else if (metricKey === 'aggregated_drafting') {
     totalFormatted = formatUsd(totalDraftingCost);
   } else if (metricKey === 'aggregated_enrichment') {
     totalFormatted = formatUsd(totalEnrichmentCost);
-  } else if (metricKey === 'total_spend') {
+  } else if (metricKey === 'total_spend' || metricKey === 'hub_attributed') {
     totalFormatted = formatUsd(totalSpend);
   } else if (metricKey === 'delivery_rate') {
     totalFormatted = totalSent > 0 ? formatPct(totalDelivered / totalSent) : '—';
@@ -390,7 +393,6 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     totalFormatted = formatCount(campaigns.length);
   }
 
-  // 3. Detailed lead / email item rows query
   const { rows: itemRows } = await dbQuery<{
     id: string;
     full_name: string;
@@ -458,5 +460,107 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     trend,
     campaigns,
     items,
+    notes: [
+      'Attributed Claude is a UNION of drafting events, company research jobs, reply drafts, extraction, and dashboard summaries.',
+      'Shared company research jobs appear under every intersecting campaign; org totals count each job once.',
+    ],
+  };
+}
+
+async function billedDrilldown(
+  metricKey: string,
+  window: { from: string; to: string },
+  billedDays: { fromDay: string; toDay: string } | null,
+  safeCampaignIds: string[],
+  excludedLeads: string[],
+  excludedRunIds: string[],
+): Promise<AnalyticsDrilldownData> {
+  const isVariance = metricKey === 'spend_variance';
+  const title = isVariance ? 'Billed − Attributed Variance' : 'Anthropic Billed (Cost API)';
+  const notes = [
+    'Billed totals come from Anthropic Cost API daily buckets (complete UTC days only).',
+    'Today is excluded because the current UTC day is incomplete and Cost API can lag ~5 minutes.',
+    'Billed is org-wide and does not split by campaign. Playground and unrecorded calls show up here only.',
+  ];
+
+  if (!billedDays) {
+    return {
+      metricKey,
+      title,
+      unit: 'usd',
+      totalFormatted: '$0.00',
+      trend: [],
+      campaigns: [],
+      items: [],
+      notes: [...notes, 'No complete UTC days in this window yet.'],
+    };
+  }
+
+  const [billedDaily, billedByModel, billedItems, attributedDaily] = await Promise.all([
+    loadAnthropicBilledDaily(billedDays.fromDay, billedDays.toDay),
+    loadAnthropicBilledByModel(billedDays.fromDay, billedDays.toDay),
+    loadAnthropicBilledBreakdown(billedDays.fromDay, billedDays.toDay),
+    isVariance
+      ? loadAttributedCostDaily({
+          from: window.from,
+          to: window.to,
+          campaignIds: safeCampaignIds,
+          excludedLeadIds: excludedLeads,
+          excludedRunIds,
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const billedByDay = new Map(billedDaily.map((r) => [r.day, Number(r.billed)]));
+  const attributedByDay = new Map(
+    attributedDaily.map((r) => [r.day, attributedDayTotal(r)]),
+  );
+
+  const trendDays: string[] = [];
+  for (let d = new Date(`${billedDays.fromDay}T00:00:00.000Z`); d.toISOString().slice(0, 10) <= billedDays.toDay; d.setUTCDate(d.getUTCDate() + 1)) {
+    trendDays.push(d.toISOString().slice(0, 10));
+  }
+
+  const trend: DailyTrendPoint[] = trendDays.map((day) => {
+    const billed = billedByDay.get(day) ?? 0;
+    const attributed = attributedByDay.get(day) ?? 0;
+    return { date: day, value: isVariance ? billed - attributed : billed };
+  });
+
+  const billedTotal = billedDaily.reduce((acc, r) => acc + Number(r.billed), 0);
+  const attributedTotal = attributedDaily.reduce((acc, r) => acc + attributedDayTotal(r), 0);
+  const total = isVariance ? billedTotal - attributedTotal : billedTotal;
+
+  const campaigns: DrilldownCampaignRow[] = billedByModel.map((row) => ({
+    campaign_id: row.model,
+    campaign_name: row.model,
+    metric_value: Number(row.amount_usd),
+    formatted_value: formatUsd(Number(row.amount_usd)),
+    lead_count: 0,
+    emails_sent: 0,
+    total_spend_usd: Number(row.amount_usd),
+  }));
+
+  const items: DrilldownItemRow[] = billedItems.map((row, index) => ({
+    id: `${row.day}:${row.model ?? ''}:${row.token_type ?? ''}:${index}`,
+    lead_name: row.token_type || '(no token type)',
+    lead_company: row.model,
+    lead_email: null,
+    campaign_name: row.model || '(unspecified model)',
+    status_or_event: row.cost_type || 'tokens',
+    cost_usd: Number(row.amount_usd),
+    occurred_at: `${row.day}T00:00:00.000Z`,
+    details: row.description,
+  }));
+
+  return {
+    metricKey,
+    title,
+    unit: 'usd',
+    totalFormatted: formatUsd(total),
+    trend,
+    campaigns,
+    items,
+    notes,
   };
 }

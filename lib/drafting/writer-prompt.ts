@@ -14,7 +14,7 @@ import type {
   LintFinding,
 } from '@/lib/drafting/types';
 
-export const DRAFTING_WRITER_PROMPT_VERSION = 'drafting-writer-v14-subject-identity';
+export const DRAFTING_WRITER_PROMPT_VERSION = 'drafting-writer-v16-greeting-capitalize';
 
 /** Dedicated system instruction — stacked clauses are banned on first write. */
 export const WRITER_NO_STACKED_CLAUSES_SYSTEM_BLOCK = `## Absolute rule: no stacked clauses
@@ -208,5 +208,6 @@ Grounding requirements:
 Do not write any signature or sign-off. bodyText must end on the ask (or the last prose sentence). Never append the sender's name, title, company, "Best,", "Regards,", or similar — the product adds an HTML signature after the body.
 
 Last check before you answer: re-read every sentence you wrote. One idea per sentence. Any sentence that joins several facts, appositions, or qualifying clauses must be split now, and checks.noStackedClauses must report honestly.
+The first line of bodyText is only the greeting: the recipient's first name and a comma. Then a blank line. Then the first sentence — and that sentence must start with a capital letter. Never write "Blane, your work…" on one line, and never open the body paragraph with a lowercase word after the blank line.
 Call report_draft_output with the finished email and complete grounding metadata.`;
 }

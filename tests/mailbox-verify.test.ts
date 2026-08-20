@@ -12,7 +12,7 @@ import {
   shouldScheduleMailboxVerification,
 } from '@/lib/mailbox-verify';
 
-const inboxId = 'lafwh@agentmail.to';
+const inboxId = 'abcdefg@agentmail.to';
 const sent = { message_id: 'probe-123', thread_id: 'thread-1', sent_at: new Date().toISOString() };
 
 test('shouldScheduleMailboxVerification only schedules direct and inferred', () => {

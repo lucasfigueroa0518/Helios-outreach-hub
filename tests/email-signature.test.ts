@@ -11,6 +11,7 @@ import {
   resolveEmailSignature,
   SIGNATURE_HEADSHOT_CID,
   stripTrailingTextSignature,
+  plainTextBodyToHtml,
 } from '@/lib/drafting/email-signature';
 
 test('resolveEmailSignature hardcodes Lucas identity and requires cid for headshot on send', () => {
@@ -111,6 +112,12 @@ test('isSenderProfileSignatureReady requires headshot except for Lucas', () => {
     }),
     true,
   );
+});
+
+test('plainTextBodyToHtml keeps the greeting on its own paragraph', () => {
+  const html = plainTextBodyToHtml('Blane,\n\nyour work negotiating contracts.');
+  assert.match(html, /<p[^>]*>Blane,<\/p>/);
+  assert.match(html, /<p[^>]*>your work negotiating contracts\.<\/p>/);
 });
 
 test('buildOutreachEmailHtml includes cid photo table signature', () => {

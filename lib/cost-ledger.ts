@@ -1,6 +1,7 @@
 import { dbQuery } from '@/lib/db';
 import { formatUsd } from '@/lib/drafting/cost';
-import { estimateEnrichmentJobCostUsd } from '@/lib/cost-ledger-pricing';
+import type { AnthropicUsageContract } from '@/lib/anthropic-pricing';
+import { estimateEnrichmentJobCostUsd, enrichmentSearchOnlyCostUsd } from '@/lib/cost-ledger-pricing';
 import {
   estimateCampaignCostFlatFallback,
   estimateCampaignCostFromLeads,
@@ -94,13 +95,18 @@ export async function recordEnrichmentJobCost(input: {
   searchesUsed: number;
   inputTokens?: number;
   outputTokens?: number;
+  billedUsage?: AnthropicUsageContract | null;
 }): Promise<void> {
   if (!input.runIds.length) return;
-  const priced = estimateEnrichmentJobCostUsd({
-    searchesUsed: input.searchesUsed,
-    inputTokens: input.inputTokens,
-    outputTokens: input.outputTokens,
-  });
+  const priced = input.billedUsage
+    ? {
+        costUsd: input.billedUsage.costUsd,
+        usage: {
+          ...input.billedUsage,
+          searches: input.billedUsage.web_search_requests,
+        },
+      }
+    : enrichmentSearchOnlyCostUsd(input.searchesUsed);
 
   await dbQuery(
     `UPDATE outreach.company_research_jobs

@@ -1,5 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 
+import { cachedSystemText, withConversationCache } from '@/lib/anthropic-cache';
+import { priceAnthropicMessages, type AnthropicUsageContract } from '@/lib/anthropic-pricing';
 import { dbQuery } from '@/lib/db';
 import {
   createContextUpdate,
@@ -32,7 +34,31 @@ type EventForPrompt = {
   url: string;
 };
 
+const DASHBOARD_UPDATE_SYSTEM = `You are writing a project status update for a Helios Marketing client.
+Helios is an AI marketing agency. The client reads these bullets directly.
+
+VOICE RULES (from Helios style guide):
+- Editorial, confident, direct. No filler. No marketing fluff.
+- Outcome-led: what shipped or moved, not what people "worked on."
+- Plain about AI: "systems," "pipelines," "automations" — never "magic" or "revolutionary."
+- No exclamation marks. No emoji.
+- First-person plural ("we shipped," "we kicked off").
+- Numbers stay in numerals.
+- Title-case for product/feature names; sentence-case otherwise.`;
+
 export function buildPrompt(
+  project: ProjectForPrompt,
+  readme: string | null,
+  events: EventForPrompt[],
+  windowStart: Date,
+  windowEnd: Date,
+): string {
+  return `${DASHBOARD_UPDATE_SYSTEM}
+
+${buildDashboardUserPrompt(project, readme, events, windowStart, windowEnd)}`;
+}
+
+function buildDashboardUserPrompt(
   project: ProjectForPrompt,
   readme: string | null,
   events: EventForPrompt[],
@@ -52,19 +78,7 @@ export function buildPrompt(
     )
     .join('\n---\n');
 
-  return `You are writing a project status update for a Helios Marketing client.
-Helios is an AI marketing agency. The client reads these bullets directly.
-
-VOICE RULES (from Helios style guide):
-- Editorial, confident, direct. No filler. No marketing fluff.
-- Outcome-led: what shipped or moved, not what people "worked on."
-- Plain about AI: "systems," "pipelines," "automations" — never "magic" or "revolutionary."
-- No exclamation marks. No emoji.
-- First-person plural ("we shipped," "we kicked off").
-- Numbers stay in numerals.
-- Title-case for product/feature names; sentence-case otherwise.
-
-PROJECT CONTEXT (do not summarize this, just use it for understanding):
+  return `PROJECT CONTEXT (do not summarize this, just use it for understanding):
 Project name: ${project.name}
 Client: ${project.client.name}
 README:
@@ -143,14 +157,19 @@ export function parseClaudeJson(text: string): { bullets: Bullet[] } {
 async function callClaudeWithRetry(
   client: Anthropic,
   prompt: string,
-): Promise<{ bullets: Bullet[] }> {
+): Promise<{ bullets: Bullet[]; billedUsage: AnthropicUsageContract }> {
+  const system = cachedSystemText(DASHBOARD_UPDATE_SYSTEM);
   const userMsg: Anthropic.MessageParam = { role: 'user', content: prompt };
+  const billed: Anthropic.Message[] = [];
+  const modelId = 'claude-sonnet-4-5';
 
   const first = await client.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: modelId,
     max_tokens: 1024,
-    messages: [userMsg],
+    system,
+    messages: withConversationCache([userMsg]),
   });
+  billed.push(first);
 
   const firstBlock = first.content[0];
   if (!firstBlock || firstBlock.type !== 'text') {
@@ -159,12 +178,16 @@ async function callClaudeWithRetry(
   const firstText = firstBlock.text;
 
   try {
-    return parseClaudeJson(firstText);
+    return {
+      ...parseClaudeJson(firstText),
+      billedUsage: priceAnthropicMessages(billed, { modelId }),
+    };
   } catch {
     const retry = await client.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: modelId,
       max_tokens: 1024,
-      messages: [
+      system,
+      messages: withConversationCache([
         userMsg,
         { role: 'assistant', content: firstText },
         {
@@ -172,14 +195,18 @@ async function callClaudeWithRetry(
           content:
             'Your previous response was not valid JSON. Return only the JSON object, no other text.',
         },
-      ],
+      ]),
     });
+    billed.push(retry);
 
     const retryBlock = retry.content[0];
     if (!retryBlock || retryBlock.type !== 'text') {
       throw new Error('Non-text response from Claude on retry');
     }
-    return parseClaudeJson(retryBlock.text);
+    return {
+      ...parseClaudeJson(retryBlock.text),
+      billedUsage: priceAnthropicMessages(billed, { modelId }),
+    };
   }
 }
 
@@ -307,8 +334,9 @@ export async function generateUpdate(
 
   let bullets: Bullet[] = [];
   let aiError: string | undefined;
+  let billedUsage: AnthropicUsageContract | null = null;
   try {
-    const prompt = buildPrompt(
+    const prompt = buildDashboardUserPrompt(
       { name: project.name, client: { name: client.name } },
       project.readmeMarkdown,
       events,
@@ -318,6 +346,7 @@ export async function generateUpdate(
 
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const parsed = await callClaudeWithRetry(anthropic, prompt);
+    billedUsage = parsed.billedUsage;
 
     bullets = sanitizeBullets(parsed.bullets ?? [], eventIds).slice(0, 6);
     if (bullets.length === 0) {
@@ -348,6 +377,7 @@ export async function generateUpdate(
     windowStart,
     windowEnd,
     generatedBy,
+    billedUsage,
   });
 
   console.log('[generateUpdate] persisted update', { id: update.id, source });

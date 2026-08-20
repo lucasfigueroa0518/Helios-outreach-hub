@@ -2,13 +2,19 @@
  * Inbound reply ingest: store body, forward to sender, enqueue delayed auto-response.
  */
 
+import { agentMailSendOutreach } from '@/lib/agentmail';
+import {
+  extractEmailAddress,
+  INBOUND_FORWARD_LABEL,
+  isOutreachInbox,
+  personalForwardEmailForInbox,
+} from '@/lib/agentmail-inboxes';
 import { dbQuery } from '@/lib/db';
 import { enqueueWork } from '@/lib/orchestration/repository';
 import {
   REPLY_AUTO_DELAY_MS,
   REPLY_MAX_IMMEDIATE_TURNS,
 } from '@/lib/drafting/reply-constants';
-import { createResendClient } from '@/lib/drafting/send';
 import {
   cancelScheduledFollowups,
   countImmediateSentReplies,
@@ -37,27 +43,13 @@ export type ReceivedEmailContent = {
   receivedAt: string;
 };
 
-function asString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+function stripHtml(html: string | null | undefined): string | null {
+  if (!html?.trim()) return null;
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return text || null;
 }
 
-function headerMap(raw: unknown): Record<string, string> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value === 'string' && value.trim()) out[key.toLowerCase()] = value.trim();
-  }
-  return out;
-}
-
-function extractEmailAddress(raw: string | null | undefined): string | null {
-  if (!raw?.trim()) return null;
-  const match = raw.trim().match(/<([^>]+)>/);
-  const addr = (match?.[1] ?? raw).trim().toLowerCase();
-  return addr.includes('@') ? addr : null;
-}
-
-/** True when the inbound message looks like an autoresponder / OOO / bulk. */
+/** OOO / bulk headers — stored for display, but we still auto-respond. */
 export function isAutomaticReply(headers: Record<string, string>, fromEmail: string): string | null {
   const autoSubmitted = headers['auto-submitted']?.toLowerCase() ?? '';
   if (autoSubmitted && autoSubmitted !== 'no') {
@@ -74,6 +66,46 @@ export function isAutomaticReply(headers: Record<string, string>, fromEmail: str
     return 'mailer_daemon';
   }
   return null;
+}
+
+/** Only bounce/daemon mail skips the Calendly auto-response. OOO still gets one. */
+export function autoReplySkipReason(
+  headers: Record<string, string>,
+  fromEmail: string,
+): string | null {
+  if (/^(mailer-daemon|postmaster)@/i.test(fromEmail)) return 'mailer_daemon';
+  const subject = headers.subject?.toLowerCase() ?? '';
+  if (/\b(undeliverable|delivery status notification|mail delivery failed)\b/i.test(subject)) {
+    return 'bounce_subject';
+  }
+  return null;
+}
+
+export function buildInboundForwardPayload(
+  outbound: Pick<OutboundSendContext, 'from_email' | 'to_email' | 'subject'>,
+  inbound: ReceivedEmailContent,
+): { to: string; subject: string; text: string } | null {
+  const inbox = extractEmailAddress(outbound.from_email) ?? outbound.from_email.toLowerCase();
+  if (!isOutreachInbox(inbox)) return null;
+  const to = personalForwardEmailForInbox(inbox);
+  const from = extractEmailAddress(inbound.fromEmail) ?? inbound.fromEmail.toLowerCase();
+  if (from === to) return null;
+  if (isOutreachInbox(from)) return null;
+  const originalSubject = inbound.subject?.trim() || outbound.subject?.trim() || `reply from ${from}`;
+  const subject = /^fwd:/i.test(originalSubject) ? originalSubject : `Fwd: ${originalSubject}`;
+  const body = inbound.textBody?.trim()
+    || stripHtml(inbound.htmlBody)
+    || '(no text body)';
+  const text = [
+    'Forwarded lead reply to your Helios outreach.',
+    `From: ${inbound.fromEmail}`,
+    `To: ${(inbound.toEmails.length ? inbound.toEmails : [outbound.from_email]).join(', ')}`,
+    `Original To: ${outbound.to_email}`,
+    `Subject: ${originalSubject}`,
+    '',
+    body,
+  ].join('\n');
+  return { to, subject, text };
 }
 
 export async function loadOutboundSendContext(emailSendId: string): Promise<OutboundSendContext | null> {
@@ -98,66 +130,33 @@ export async function loadOutboundSendContext(emailSendId: string): Promise<Outb
 }
 
 export async function fetchReceivedEmailContent(
-  providerEmailId: string,
-  fallbackReceivedAt: string,
+  _providerEmailId: string,
+  _fallbackReceivedAt: string,
 ): Promise<ReceivedEmailContent | null> {
-  if (!process.env.RESEND_API_KEY?.trim()) return null;
-  try {
-    const client = createResendClient();
-    const received = await client.emails.receiving.get(providerEmailId);
-    const data = received.data;
-    if (!data) return null;
-    const headers = headerMap(data.headers);
-    const fromEmail = extractEmailAddress(asString(data.from) ?? headers.from)
-      ?? 'unknown@unknown';
-    const toRaw = data.to;
-    const toEmails = Array.isArray(toRaw)
-      ? toRaw.map((entry) => extractEmailAddress(String(entry))).filter((e): e is string => Boolean(e))
-      : [];
-    return {
-      providerEmailId,
-      fromEmail,
-      toEmails,
-      subject: asString(data.subject),
-      textBody: asString(data.text) ?? asString((data as { text_body?: string }).text_body),
-      htmlBody: asString(data.html) ?? asString((data as { html_body?: string }).html_body),
-      headers,
-      receivedAt: asString(data.created_at) ?? fallbackReceivedAt,
-    };
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 async function forwardInboundToSender(
   outbound: OutboundSendContext,
   inbound: ReceivedEmailContent,
 ): Promise<boolean> {
-  const sender = outbound.from_email.trim().toLowerCase();
-  if (!sender.includes('@') || !process.env.RESEND_API_KEY?.trim()) return false;
+  const payload = buildInboundForwardPayload(outbound, inbound);
+  if (!payload) return false;
+  const inboxId = extractEmailAddress(outbound.from_email) ?? outbound.from_email;
   try {
-    const client = createResendClient();
-    const subject = `Fwd: ${inbound.subject?.trim() || outbound.subject || 'Lead reply'}`;
-    const body = [
-      'Forwarded lead reply from Outreach Hub.',
-      '',
-      `From: ${inbound.fromEmail}`,
-      `Received: ${inbound.receivedAt}`,
-      `Original outbound: ${outbound.subject}`,
-      '',
-      '-----',
-      '',
-      inbound.textBody?.trim()
-        || '(no plain-text body; see HTML in Resend if needed)',
-    ].join('\n');
-    const response = await client.emails.send({
-      from: process.env.RESEND_FROM_EMAIL?.trim() || outbound.from_email,
-      to: [sender],
-      subject,
-      text: body,
+    await agentMailSendOutreach({
+      inboxId,
+      to: payload.to,
+      subject: payload.subject,
+      text: payload.text,
+      labels: [INBOUND_FORWARD_LABEL, 'helios-outreach-forward'],
     });
-    return !response.error;
-  } catch {
+    return true;
+  } catch (error) {
+    console.warn(
+      `[inbound-forward] failed ${inboxId} → ${payload.to}:`,
+      error instanceof Error ? error.message : error,
+    );
     return false;
   }
 }
@@ -169,6 +168,7 @@ export async function processInboundLeadReply(input: {
   emailSendId: string;
   providerEmailId: string | null;
   eventAt: string;
+  content?: ReceivedEmailContent | null;
 }): Promise<{
   inboundId?: string;
   replySendId?: string;
@@ -181,7 +181,7 @@ export async function processInboundLeadReply(input: {
   const providerEmailId = input.providerEmailId?.trim();
   if (!providerEmailId) return { skipped: 'missing_provider_email_id' };
 
-  let inbound = await fetchReceivedEmailContent(providerEmailId, input.eventAt);
+  let inbound = input.content ?? await fetchReceivedEmailContent(providerEmailId, input.eventAt);
   if (!inbound) {
     inbound = {
       providerEmailId,
@@ -195,8 +195,11 @@ export async function processInboundLeadReply(input: {
     };
   }
 
+  const fromEmail = extractEmailAddress(inbound.fromEmail) ?? inbound.fromEmail.toLowerCase();
+  inbound = { ...inbound, fromEmail };
+
   // Never auto-respond to our own addresses.
-  if (inbound.fromEmail.toLowerCase() === outbound.from_email.toLowerCase()) {
+  if (fromEmail === outbound.from_email.toLowerCase() || isOutreachInbox(fromEmail)) {
     const { rows } = await dbQuery<{ id: string }>(
       `INSERT INTO outreach.inbound_emails (
          owner_id, campaign_id, email_send_id, drafting_item_id, provider_email_id,
@@ -223,7 +226,9 @@ export async function processInboundLeadReply(input: {
     return { inboundId: rows[0]?.id, skipped: 'from_self' };
   }
 
-  const autoSkip = isAutomaticReply(inbound.headers, inbound.fromEmail);
+  const headers = { ...inbound.headers };
+  if (inbound.subject && !headers.subject) headers.subject = inbound.subject;
+  const autoSkip = autoReplySkipReason(headers, inbound.fromEmail);
   const { rows: inboundRows } = await dbQuery<{ id: string; forwarded_to_sender_at: string | null }>(
     `INSERT INTO outreach.inbound_emails (
        owner_id, campaign_id, email_send_id, drafting_item_id, provider_email_id,

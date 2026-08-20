@@ -22,6 +22,7 @@ function isPublicPath(pathname: string): boolean {
   if (pathname.startsWith('/api/auth')) return true;
   if (pathname === '/api/health') return true;
   if (pathname === '/api/webhooks/resend') return true;
+  if (pathname === '/api/webhooks/agentmail') return true;
   if (pathname === '/api/webhooks/gcp-billing') return true;
   if (pathname.startsWith('/api/public/sender-headshots/')) return true;
   return false;

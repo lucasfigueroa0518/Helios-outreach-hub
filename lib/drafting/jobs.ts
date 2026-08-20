@@ -17,6 +17,7 @@ import {
 import {
   hasBlockingHardLintFailures,
   hasHardLintFailures,
+  hasJudgmentHardLintFailures,
   hasMechanicalAutoRepairLintFailures,
   lintDraft,
   mechanicalAutoRepairFindings,
@@ -24,6 +25,8 @@ import {
 import { runWithLeaseHeartbeat } from '@/lib/drafting/lease-heartbeat';
 import {
   buildEffectiveInputSnapshot,
+  buildEffectiveLeadFields,
+  normalizeDraftBody,
   normalizeDraftText,
   sha256Fingerprint,
 } from '@/lib/drafting/normalize';
@@ -1158,9 +1161,10 @@ async function persistDraftFromProvider(
   const lintStartedAt = Date.now();
   const subject = normalizeDraftText(writeResult.draft.subject).replace(/\n/g, ' ').trim();
   const sender = item.input_snapshot.sender;
+  const firstName = buildEffectiveLeadFields(item.input_snapshot).firstName;
   // HTML signature is appended at send — never persist a duplicate text sign-off.
   const bodyText = stripTrailingTextSignature(
-    normalizeDraftText(writeResult.draft.bodyText),
+    normalizeDraftBody(writeResult.draft.bodyText, firstName),
     {
       displayName: sender.displayName,
       title: sender.title,
@@ -1294,10 +1298,14 @@ async function persistDraftFromProvider(
     };
   }
 
-  // Judgment hard fails (humility theater, peer bait, etc.) skip auto-repair.
-  // Still surface the draft in Email review so the batch completes smoothly —
-  // Approve stays blocked until a rewrite clears lint.
-  if (hasBlockingHardLintFailures(lintResult) && !options.isRepair) {
+  // Judgment / temporal hard fails skip auto-repair on first write. After one
+  // mechanical repair, leftover judgment must still land in Email review —
+  // otherwise an em dash (common on Haiku) turns a reviewable draft into
+  // failed_write. Approve stays blocked until a rewrite clears lint.
+  if (
+    hasBlockingHardLintFailures(lintResult)
+    && (!options.isRepair || hasJudgmentHardLintFailures(lintResult))
+  ) {
     await dbTransaction(async (client) => {
       await saveEmailDraft(client, item, {
         subject,
@@ -1404,6 +1412,18 @@ async function persistDraftFromProvider(
         usage: usageBlob,
       });
       await transitionItemState(client, item.id, 'failed_write', true);
+      await client.query(
+        `UPDATE outreach.drafting_items
+            SET last_error_code = $2,
+                last_error_message = $3,
+                updated_at = now()
+          WHERE id = $1`,
+        [
+          item.id,
+          'hard_lint_after_repair',
+          lintResult.hard.map((finding) => finding.code).join(','),
+        ],
+      );
       await refreshCompletionTimestamps(client, item.workspace_id);
     });
     const failed = await markJobFailed(

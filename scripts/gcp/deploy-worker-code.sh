@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Push latest repo code to an existing e2-micro worker and restart.
+# Push latest repo code to the always-on GCP worker and restart.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -84,6 +84,9 @@ tar -czf "${ARCHIVE}" \
 gcloud compute scp --zone="${ZONE}" --project="${PROJECT}" \
   "${ARCHIVE}" "${INSTANCE}:/tmp/helios-app.tgz"
 
+gcloud compute scp --zone="${ZONE}" --project="${PROJECT}" \
+  scripts/gcp/helios-worker.service "${INSTANCE}:/tmp/helios-worker.service"
+
 if [[ -f "${ENV_FILE}" ]]; then
   gcloud compute scp --zone="${ZONE}" --project="${PROJECT}" \
     "${ENV_FILE}" "${INSTANCE}:/tmp/worker.env"
@@ -98,6 +101,8 @@ gcloud compute ssh "${INSTANCE}" --zone="${ZONE}" --project="${PROJECT}" --comma
     sudo mv /tmp/worker.env /opt/helios-worker/worker.env
     sudo chmod 600 /opt/helios-worker/worker.env
   fi
+  sudo cp /tmp/helios-worker.service /etc/systemd/system/helios-worker.service
+  sudo systemctl daemon-reload
   cd /opt/helios-worker/app
   sudo npm ci
   sudo systemctl restart helios-worker

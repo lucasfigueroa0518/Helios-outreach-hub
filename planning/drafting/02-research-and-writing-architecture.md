@@ -65,7 +65,7 @@ Implementation creates a committed build-safe directory:
 
 ```text
 resources/drafting/
-  first-contact-outreach-v5.md
+  first-contact-outreach-v8.md
   embark-positioning-v1.pdf
   embark-positioning-v1.txt
   embark-capabilities-v1.json
@@ -73,7 +73,7 @@ resources/drafting/
 ```
 
 - Copy, do not silently move/delete, the seeded originals.
-- `first-contact-outreach-v5.md` is byte-for-byte the approved skill.
+- `first-contact-outreach-v8.md` is byte-for-byte the approved skill.
 - `embark-positioning-v1.pdf` is byte-for-byte the approved two-page PDF.
 - `embark-positioning-v1.txt` is a human-reviewed transcription/extract of the
   PDF used for deterministic prompt injection.
@@ -866,7 +866,8 @@ Place static content first:
 
 Use explicit prompt-cache control on the final static block. For a multi-lead
 interactive run, use the current supported 1-hour ephemeral TTL when expected
-batch duration justifies it. Current official docs state:
+batch duration justifies it. Implementation helpers and the call-site map live
+in `docs/prompt-caching.md`. Current official docs state:
 
 - 5-minute writes cost 1.25× base input;
 - 1-hour writes cost 2×;

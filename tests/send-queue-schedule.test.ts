@@ -6,14 +6,17 @@ import {
   SEND_WINDOW_END_HOUR,
   SEND_WINDOW_START_HOUR,
   addCalendarDays,
+  allocateInboxSlots,
   allocateOverflowSlots,
   allocatePackedSlots,
   computeShareTransferCount,
   formatNyDate,
   formatNyDateLabel,
+  inboxUsageKey,
   nyWallTimeToUtc,
   randomNySendTime,
   remainingCapacity,
+  sendQueueBoardWindow,
 } from '@/lib/drafting/send-queue-schedule';
 
 function nyHour(date: Date): number {
@@ -37,6 +40,13 @@ test('formatNyDateLabel renders month and day', () => {
 test('addCalendarDays rolls months', () => {
   assert.equal(addCalendarDays('2026-08-31', 1), '2026-09-01');
   assert.equal(addCalendarDays('2026-12-31', 1), '2027-01-01');
+});
+
+test('sendQueueBoardWindow includes the prior week and two-week lookahead', () => {
+  assert.deepEqual(sendQueueBoardWindow('2026-08-20'), {
+    from: '2026-08-13',
+    to: '2026-09-03',
+  });
 });
 
 test('nyWallTimeToUtc lands on the intended NY wall clock', () => {
@@ -68,6 +78,7 @@ test('allocateOverflowSlots skips today and fills future days to cap', () => {
     count: 5,
     dayUsage: usage,
     todayNy: '2026-08-06',
+    cap: 20,
     rng: () => 0.1,
   });
   assert.equal(slots.length, 5);
@@ -79,23 +90,24 @@ test('allocateOverflowSlots skips today and fills future days to cap', () => {
 
 test('allocateOverflowSlots walks past full days', () => {
   const usage = new Map<string, number>([
-    ['2026-08-07', DAILY_SEND_CAP],
-    ['2026-08-08', DAILY_SEND_CAP],
+    ['2026-08-07', 20],
+    ['2026-08-08', 20],
   ]);
   const slots = allocateOverflowSlots({
     count: 2,
     dayUsage: usage,
     todayNy: '2026-08-06',
+    cap: 20,
     rng: () => 0.2,
   });
   assert.deepEqual(slots.map((s) => s.scheduleDate), ['2026-08-09', '2026-08-09']);
 });
 
 test('remainingCapacity clamps at zero', () => {
-  assert.equal(remainingCapacity(0), 20);
-  assert.equal(remainingCapacity(15), 5);
-  assert.equal(remainingCapacity(20), 0);
-  assert.equal(remainingCapacity(25), 0);
+  assert.equal(remainingCapacity(0, 10), 10);
+  assert.equal(remainingCapacity(7, 10), 3);
+  assert.equal(remainingCapacity(10, 10), 0);
+  assert.equal(remainingCapacity(25, 10), 0);
 });
 
 test('allocatePackedSlots can start today', () => {
@@ -104,10 +116,77 @@ test('allocatePackedSlots can start today', () => {
     count: 4,
     dayUsage: usage,
     startNy: '2026-08-10',
+    cap: 20,
     rng: () => 0.1,
   });
   assert.equal(slots.filter((s) => s.scheduleDate === '2026-08-10').length, 2);
   assert.equal(slots.filter((s) => s.scheduleDate === '2026-08-11').length, 2);
+});
+
+test('allocateInboxSlots fills every address to cap before the next day', () => {
+  const inboxes = [
+    { id: 'lucas-1', email: 'lucas@heliosgroup.email' },
+    { id: 'lucas-2', email: 'lucas@heliosgroup.online' },
+    { id: 'lucas-3', email: 'l.figueroa@heliosgroup.email' },
+    { id: 'lucas-4', email: 'lfigueroa@heliosgroup.email' },
+  ];
+  const slots = allocateInboxSlots({
+    count: 14,
+    inboxes,
+    usage: new Map(),
+    startNy: '2026-08-19',
+    cap: 10,
+    rng: () => 0.1,
+  });
+  assert.equal(slots.length, 14);
+  assert.ok(slots.every((s) => s.scheduleDate === '2026-08-19'));
+  assert.equal(slots.filter((s) => s.email === 'lucas@heliosgroup.email').length, 10);
+  assert.equal(slots.filter((s) => s.email === 'lucas@heliosgroup.online').length, 4);
+});
+
+test('allocateInboxSlots fills each address for day one then day two', () => {
+  const inboxes = [
+    { id: 'lucas-1', email: 'lucas@heliosgroup.email' },
+    { id: 'lucas-2', email: 'lucas@heliosgroup.online' },
+    { id: 'lucas-3', email: 'l.figueroa@heliosgroup.email' },
+    { id: 'lucas-4', email: 'lfigueroa@heliosgroup.email' },
+  ];
+  const slots = allocateInboxSlots({
+    count: 90,
+    inboxes,
+    usage: new Map(),
+    startNy: '2026-08-15',
+    cap: 10,
+    rng: () => 0.1,
+  });
+  assert.equal(slots.length, 90);
+  const day1 = slots.filter((s) => s.scheduleDate === '2026-08-15');
+  const day2 = slots.filter((s) => s.scheduleDate === '2026-08-16');
+  const day3 = slots.filter((s) => s.scheduleDate === '2026-08-17');
+  assert.equal(day1.length, 40);
+  assert.equal(day2.length, 40);
+  assert.equal(day3.length, 10);
+  assert.ok(day1.every((s) => inboxes.some((i) => i.id === s.inboxId)));
+  assert.equal(day1.filter((s) => s.email === 'lucas@heliosgroup.email').length, 10);
+  assert.equal(day3.every((s) => s.email === 'lucas@heliosgroup.email'), true);
+});
+
+test('allocateInboxSlots respects existing inbox usage', () => {
+  const inboxes = [
+    { id: 'a', email: 'lucas@heliosgroup.email' },
+    { id: 'b', email: 'lucas@heliosgroup.online' },
+  ];
+  const usage = new Map<string, number>([[inboxUsageKey('a', '2026-08-15'), 8]]);
+  const slots = allocateInboxSlots({
+    count: 5,
+    inboxes,
+    usage,
+    startNy: '2026-08-15',
+    cap: 10,
+    rng: () => 0.2,
+  });
+  assert.equal(slots.filter((s) => s.inboxId === 'a' && s.scheduleDate === '2026-08-15').length, 2);
+  assert.equal(slots.filter((s) => s.inboxId === 'b' && s.scheduleDate === '2026-08-15').length, 3);
 });
 
 test('computeShareTransferCount equalizes backlog', () => {

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { signOut } from 'next-auth/react';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { HubPlaneFlight } from '@/app/components/plane-flight';
 import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
@@ -13,7 +13,9 @@ import { LeadListTutorial } from '@/app/hub/lead-list-tutorial';
 import { requestJson } from '@/lib/client-request';
 import { TagBadge } from '@/app/components/tag-badge';
 import { TagInputPopover } from '@/app/components/tag-input-popover';
-import { TagWithColor } from '@/lib/campaigns';
+import type { TagWithColor } from '@/lib/campaigns';
+
+const DRAFTING_POLL_MS = 5_000;
 
 type Campaign = {
   id: string;
@@ -27,6 +29,9 @@ type Campaign = {
   last_run_at: string | null;
   tags?: string[];
   tag_details?: TagWithColor[];
+  drafting_active?: boolean;
+  drafting_generated?: number;
+  drafting_total?: number;
 };
 
 function formatDate(value: string | null) {
@@ -50,6 +55,10 @@ export function CampaignHub({ email }: { email: string }) {
 
   const active = useMemo(() => campaigns.filter((campaign) => campaign.status === 'active'), [campaigns]);
   const archived = useMemo(() => campaigns.filter((campaign) => campaign.status === 'archived'), [campaigns]);
+  const anyDrafting = useMemo(
+    () => campaigns.some((campaign) => campaign.drafting_active),
+    [campaigns],
+  );
 
   async function loadCampaigns(force = false) {
     if (campaigns.length === 0) setLoading(true);
@@ -64,9 +73,21 @@ export function CampaignHub({ email }: { email: string }) {
     }
   }
 
+  const loadCampaignsRef = useRef(loadCampaigns);
+  loadCampaignsRef.current = loadCampaigns;
+
   useEffect(() => {
-    void loadCampaigns();
+    void loadCampaignsRef.current();
   }, []);
+
+  useEffect(() => {
+    if (!anyDrafting) return undefined;
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      void loadCampaignsRef.current(true);
+    }, DRAFTING_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [anyDrafting]);
 
   function openCreate() {
     setName(`Campaign #${campaigns.length + 1}`);
@@ -405,10 +426,28 @@ function CampaignRow({
     ? campaign.tag_details
     : (campaign.tags ?? []).map((t) => ({ tag: t, color: null }));
 
+  const draftingActive = Boolean(campaign.drafting_active);
+  const draftingGenerated = campaign.drafting_generated ?? 0;
+  const draftingTotal = campaign.drafting_total ?? 0;
+  const draftingLabel = draftingTotal > 0
+    ? `Drafting · ${draftingGenerated} of ${draftingTotal}`
+    : 'Drafting';
+
   return (
-    <div className="campaign-row">
-      <Link className="campaign-row__main" href={`/campaigns/${campaign.id}`}>
-        <span className="campaign-row__name">{campaign.name}</span>
+    <div className={`campaign-row${draftingActive ? ' campaign-row--drafting' : ''}`}>
+      <Link
+        className="campaign-row__main"
+        href={draftingActive ? `/campaigns/${campaign.id}/draft` : `/campaigns/${campaign.id}`}
+      >
+        <span className="campaign-row__heading">
+          <span className="campaign-row__name">{campaign.name}</span>
+          {draftingActive ? (
+            <span className="campaign-row__drafting" role="status" aria-live="polite">
+              <span className="loading-spinner campaign-row__drafting-spinner" aria-hidden="true" />
+              {draftingLabel}
+            </span>
+          ) : null}
+        </span>
         <span className="campaign-row__meta">{campaign.lead_count} {campaign.lead_count === 1 ? 'lead' : 'leads'} · {formatDate(campaign.last_run_at)}</span>
       </Link>
 

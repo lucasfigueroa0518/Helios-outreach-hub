@@ -5,10 +5,10 @@
   "assets": [
     {
       "name": "skill",
-      "file": "first-contact-outreach-v5.md",
-      "version": "v5.1",
-      "sha256": "ec9de173ed595afcf23e66fe83a02f3b85726f3a5972e396447e9b4cdb0dab60",
-      "bytes": 18199
+      "file": "first-contact-outreach-v8.md",
+      "version": "v8",
+      "sha256": "6177e30c699d92b642d9fc72b96c9d8c622da62aab74d3cda1d918f821730df7",
+      "bytes": 16996
     },
     {
       "name": "subject-line",

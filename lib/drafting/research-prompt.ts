@@ -7,7 +7,7 @@ import type {
 } from '@/lib/drafting/types';
 import { SOURCE_FAMILIES } from '@/lib/drafting/types';
 
-export const DRAFTING_RESEARCH_PROMPT_VERSION = 'drafting-research-v8-slim-skill';
+export const DRAFTING_RESEARCH_PROMPT_VERSION = 'drafting-research-v10-skill-v8';
 
 export const DRAFTING_RESEARCH_SECURITY_RULES = `You are researching one professional contact for first-contact outreach drafting.
 
@@ -35,18 +35,19 @@ Compact packet discipline (non-negotiable — noise here becomes bad email prose
 - Source quotes carry the evidence. Facts reference source IDs instead of repeating quotes and source metadata.
 - Keep reasonForWriting and whyNow to one clear sentence each. Prefer fewer selectedFactIds (the strongest anchors) over packing every project detail.`;
 
-/** Slim research brief — writer keeps the full skill; research only needs the five readings contract. */
-export const DRAFTING_RESEARCH_SLIM_BRIEF = `## Five readings research must serve (do not write the email)
+/** Slim research brief — writer keeps the full skill; research only needs the v8 readings contract. */
+export const DRAFTING_RESEARCH_SLIM_BRIEF = `## Readings research must serve (do not write the email)
 
-Produce evidence that lets a separate writer honestly hit these readings at the highest supported resolution:
+Produce evidence that lets a separate writer honestly hit the v8 contract at the highest supported resolution:
 1. Identity / freshness — who they are now, current employer/title when evidenced
-2. Prospect world — role reality, pressures, contact norms (no invented industry gaps)
-3. Structural relation — how Helios can complement without overclaiming capability
-4. Status geometry — peer/junior/senior posture justified by evidence
-5. Resolution + why-now — selected facts, reasonForWriting, whyNow only when dated evidence supports it
+2. Reader's world — role reality, pressures, contact norms; tight and precise, not a pile of connection attempts (no invented industry gaps)
+3. Status geometry — peer/junior/senior posture justified by evidence
+4. Structural relation — exactly one Helios service this reader could use, named as a deliverable (not a category or a menu); how it complements without overclaiming
+5. Reason and resolution — selected facts, reasonForWriting, whyNow only when dated evidence supports it
 
 Resolution ladder (highest honest wins): person → company → role_segment → moment → structure → true_zero.
-Prefer thinner complete packets. Omit unsupported claims. Never invent sender/Helios facts from the web.`;
+Prefer thinner complete packets. Omit unsupported claims. Never invent sender/Helios facts from the web.
+Do not guess the reader's internal state or invent segment generalizations.`;
 
 function enumSchema(values: readonly string[]) {
   return { type: 'string', enum: [...values] } as const;

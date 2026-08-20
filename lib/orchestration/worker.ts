@@ -232,9 +232,11 @@ export class OrchestrationWorker {
         const now = Date.now();
         if (now - this.lastFleetYieldLogAt > 60_000) {
           this.lastFleetYieldLogAt = now;
-          log('info', 'fleet_yield_to_primary', {
+          log('info', 'fleet_yield_as_fallback', {
             workerId: this.workerId,
-            primaryWorkerId: process.env.ORCHESTRATION_PRIMARY_WORKER_ID ?? null,
+            fallbackWorkerId: process.env.ORCHESTRATION_FALLBACK_WORKER_ID
+              ?? process.env.ORCHESTRATION_PRIMARY_WORKER_ID
+              ?? null,
           });
         }
         return;

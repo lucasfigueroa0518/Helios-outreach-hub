@@ -8,6 +8,7 @@ import { DraftingStatusStrip } from '@/app/campaigns/[id]/draft/drafting-status-
 import {
   clearDraftingLaunch,
   readDraftingLaunch,
+  readDraftingLaunchStartedAt,
 } from '@/app/campaigns/[id]/draft/drafting-launch-overlay';
 import { EmailReview } from '@/app/campaigns/[id]/draft/email-review';
 import { ExportPanel, type ExportPulse } from '@/app/campaigns/[id]/draft/export-panel';
@@ -89,6 +90,7 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
   const [pauseNotice, setPauseNotice] = useState<string | null>(null);
   const pollFailures = useRef(0);
   const requestSequence = useRef(0);
+  const loadInFlight = useRef(false);
   const defaultedMode = useRef(false);
   const exportPulseId = useRef(0);
 
@@ -214,6 +216,8 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
   }
 
   const loadSnapshot = useCallback(async () => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     const sequence = ++requestSequence.current;
     try {
       // limit=0 loads every workspace item so Email N of M matches Generated
@@ -236,16 +240,20 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
       if (data.workspace?.id) {
         clearDraftingLaunch(campaignId);
         setLaunching(false);
-      } else if (readDraftingLaunch(campaignId)) {
-        // Stale launch marker from an aborted click — release the shell.
-        clearDraftingLaunch(campaignId);
-        setLaunching(false);
+      } else {
+        const startedAt = readDraftingLaunchStartedAt(campaignId);
+        const launchIsStale = startedAt != null && Date.now() - startedAt > 180_000;
+        if (launchIsStale) {
+          clearDraftingLaunch(campaignId);
+          setLaunching(false);
+        }
       }
     } catch {
       if (sequence !== requestSequence.current) return;
       pollFailures.current += 1;
       setPollError('Updates paused — retrying');
     } finally {
+      loadInFlight.current = false;
       if (sequence === requestSequence.current) setLoading(false);
     }
   }, [campaignId]);

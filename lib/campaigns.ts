@@ -1,5 +1,6 @@
 import { type PoolClient } from 'pg';
 import { dbQuery, dbTransaction } from '@/lib/db';
+import { GENERATED_STATES, RUNNING_STATES } from '@/lib/drafting/eligibility';
 
 export type TagWithColor = {
   tag: string;
@@ -18,7 +19,66 @@ export type Campaign = {
   last_run_at: string | null;
   tags: string[];
   tag_details: TagWithColor[];
+  drafting_active: boolean;
+  drafting_generated: number;
+  drafting_total: number;
 };
+
+export function sqlLiteralTextArray(values: readonly string[]): string {
+  return `ARRAY[${values.map((value) => `'${value.replaceAll("'", "''")}'`).join(', ')}]::text[]`;
+}
+
+export function mapCampaignDraftingActivity(activity: unknown): {
+  drafting_active: boolean;
+  drafting_generated: number;
+  drafting_total: number;
+} {
+  let payload: unknown = activity;
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload) as unknown;
+    } catch {
+      payload = null;
+    }
+  }
+  const row = payload && typeof payload === 'object' ? payload as {
+    active?: unknown;
+    generated?: unknown;
+    total?: unknown;
+  } : null;
+  return {
+    drafting_active: row?.active === true,
+    drafting_generated: Number(row?.generated ?? 0) || 0,
+    drafting_total: Number(row?.total ?? 0) || 0,
+  };
+}
+
+const campaignDraftingActivitySelect = `
+    COALESCE((
+      SELECT json_build_object(
+        'active', COALESCE(bool_or(di.state = ANY(${sqlLiteralTextArray(RUNNING_STATES)})), false),
+        'generated', count(*) FILTER (WHERE di.state = ANY(${sqlLiteralTextArray(GENERATED_STATES)}))::int,
+        'total', count(*)::int
+      )
+      FROM outreach.drafting_workspaces dw
+      JOIN outreach.drafting_items di ON di.workspace_id = dw.id
+      WHERE dw.campaign_id = c.id
+        AND dw.status = 'active'
+        AND di.removed_at IS NULL
+        AND di.state <> 'removed'
+    ), '{"active":false,"generated":0,"total":0}'::json) AS drafting_activity`;
+
+type CampaignQueryRow = Omit<Campaign, 'drafting_active' | 'drafting_generated' | 'drafting_total'> & {
+  drafting_activity?: unknown;
+};
+
+function mapCampaignRow(row: CampaignQueryRow): Campaign {
+  const { drafting_activity, ...campaign } = row;
+  return {
+    ...campaign,
+    ...mapCampaignDraftingActivity(drafting_activity),
+  };
+}
 
 const campaignSelect = `
   SELECT
@@ -37,26 +97,27 @@ const campaignSelect = `
        FROM outreach.campaign_tags ct
        WHERE ct.campaign_id = c.id),
       '[]'::json
-    ) AS tag_details
+    ) AS tag_details,
+    ${campaignDraftingActivitySelect}
   FROM outreach.campaigns c
   LEFT JOIN outreach.campaign_leads cl ON cl.campaign_id = c.id
   LEFT JOIN outreach.runs r ON r.campaign_id = c.id
   WHERE c.owner_id = $1`;
 
 export async function listCampaigns(ownerId: string): Promise<Campaign[]> {
-  const { rows } = await dbQuery<Campaign>(
+  const { rows } = await dbQuery<CampaignQueryRow>(
     `${campaignSelect} GROUP BY c.id ORDER BY (c.status = 'active') DESC, c.updated_at DESC`,
     [ownerId],
   );
-  return rows;
+  return rows.map(mapCampaignRow);
 }
 
 export async function getCampaign(ownerId: string, campaignId: string): Promise<Campaign | null> {
-  const { rows } = await dbQuery<Campaign>(
+  const { rows } = await dbQuery<CampaignQueryRow>(
     `${campaignSelect} AND c.id = $2 GROUP BY c.id`,
     [ownerId, campaignId],
   );
-  return rows[0] ?? null;
+  return rows[0] ? mapCampaignRow(rows[0]) : null;
 }
 
 export async function createCampaign(
@@ -72,14 +133,14 @@ export async function createCampaign(
     const name = input?.name?.trim() || defaultName;
     // UI default is Needs Enrichment? = No (already enriched). Callers must pass true for the classic path.
     const needsEnrichment = input?.needsEnrichment ?? false;
-    const created = await client.query<Campaign>(
+    const created = await client.query<CampaignQueryRow>(
       `INSERT INTO outreach.campaigns (owner_id, name, needs_enrichment)
        VALUES ($1, $2, $3)
        RETURNING id, name, status, merged_into_id, needs_enrichment, created_at, updated_at,
          0::int AS lead_count, NULL::timestamptz AS last_run_at, '{}'::text[] AS tags, '[]'::json AS tag_details`,
       [ownerId, name, needsEnrichment],
     );
-    return created.rows[0];
+    return mapCampaignRow(created.rows[0]);
   });
 }
 
@@ -94,7 +155,7 @@ export async function updateCampaign(
     throw new Error('Invalid campaign status');
   }
 
-  const { rows } = await dbQuery<Campaign>(
+  const { rows } = await dbQuery<CampaignQueryRow>(
     `UPDATE outreach.campaigns
      SET name = COALESCE($3, name),
          status = COALESCE($4, status),
@@ -116,7 +177,7 @@ export async function updateCampaign(
        ) AS tag_details`,
     [campaignId, ownerId, name ?? null, values.status ?? null],
   );
-  return rows[0] ?? null;
+  return rows[0] ? mapCampaignRow(rows[0]) : null;
 }
 
 function mergeDuplicateSourceLeads(client: PoolClient, sourceId: string, targetId: string) {

@@ -28,6 +28,7 @@ import {
   hardLintGuidanceForWriter,
   hasBlockingHardLintFailures,
   hasHardLintFailures,
+  hasJudgmentHardLintFailures,
   hasMechanicalAutoRepairLintFailures,
   hasRetrySuggestedLint,
   lintDraft,
@@ -41,6 +42,7 @@ import {
   inputFingerprint,
   isPlaceholderValue,
   missingRequiredFields,
+  normalizeDraftBody,
   normalizeEmail,
   normalizeRequiredField,
   sha256Fingerprint,
@@ -58,6 +60,7 @@ import type {
   DraftingItemCounterInput,
   DraftingResearchPacket,
   InputSnapshot,
+  LintResult,
 } from '@/lib/drafting/types';
 import { CANONICAL_CAPABILITY_IDS } from '@/lib/drafting/types';
 
@@ -266,6 +269,66 @@ test('lint warns when subject exceeds sixty characters', () => {
   assert.ok(long.warnings.some((finding) => finding.code === 'OVERLONG_SUBJECT'));
 });
 
+test('opening greeting must sit on its own line', () => {
+  const broken = 'Blane, your work negotiating contracts probably runs through a lot of review.';
+  assert.equal(normalizeDraftBody(broken, 'Blane'), [
+    'Blane,',
+    '',
+    'Your work negotiating contracts probably runs through a lot of review.',
+  ].join('\n'));
+  assert.equal(
+    normalizeDraftBody('Hi Jane, I saw the filing.', 'Jane'),
+    'Hi Jane,\n\nI saw the filing.',
+  );
+  assert.equal(
+    normalizeDraftBody('Blane,\nyour work', 'Blane'),
+    'Blane,\n\nYour work',
+  );
+  assert.equal(
+    normalizeDraftBody('Blane,\n\nyour work', 'Blane'),
+    'Blane,\n\nYour work',
+  );
+  assert.equal(
+    normalizeDraftBody('Given your years leading Kean Miller, I wanted to write.'),
+    'Given your years leading Kean Miller, I wanted to write.',
+  );
+  assert.equal(
+    normalizeDraftBody('Contract, I wanted to write.', 'Blane'),
+    'Contract, I wanted to write.',
+  );
+
+  const dirty = lintDraft('Contract review', broken);
+  assert.ok(dirty.hard.some((finding) => finding.code === 'GREETING_LINE_BREAK'));
+  const clean = lintDraft('Contract review', normalizeDraftBody(broken, 'Blane'));
+  assert.equal(clean.hard.some((finding) => finding.code === 'GREETING_LINE_BREAK'), false);
+  assert.equal(clean.hard.some((finding) => finding.code === 'GREETING_BODY_CAPITALIZATION'), false);
+
+  const lowercaseOpen = 'Steve,\n\nyour remit as COO covers information technology.';
+  assert.ok(lintDraft('IT remit', lowercaseOpen).hard.some(
+    (finding) => finding.code === 'GREETING_BODY_CAPITALIZATION',
+  ));
+  assert.equal(
+    lintDraft('IT remit', normalizeDraftBody(lowercaseOpen, 'Steve')).hard.some(
+      (finding) => finding.code === 'GREETING_BODY_CAPITALIZATION',
+    ),
+    false,
+  );
+});
+
+test('lint warns when body exceeds 120 words or a paragraph has more than three sentences', () => {
+  const short = lintDraft('Website conversion', 'Hi Jane,\n\nI saw your recent filing.');
+  assert.equal(short.warnings.some((finding) => finding.code === 'OVERLONG_BODY'), false);
+  assert.equal(short.warnings.some((finding) => finding.code === 'OVERLONG_PARAGRAPH'), false);
+
+  const longBody = Array.from({ length: 121 }, (_, index) => `word${index}`).join(' ');
+  const long = lintDraft('Website conversion', longBody);
+  assert.ok(long.warnings.some((finding) => finding.code === 'OVERLONG_BODY'));
+
+  const longParagraph = 'One. Two. Three. Four.';
+  const paragraph = lintDraft('Website conversion', longParagraph);
+  assert.ok(paragraph.warnings.some((finding) => finding.code === 'OVERLONG_PARAGRAPH'));
+});
+
 test('lint flags banned phrases and em dashes as hard failures', () => {
   const clean = lintDraft('Quick follow-up', 'Hi Jane,\n\nI saw your recent filing.');
   assert.equal(hasHardLintFailures(clean), false);
@@ -295,6 +358,7 @@ test('writer lint guidance and repair formatting are available offline', () => {
   const guide = hardLintGuidanceForWriter();
   assert.ok(guide.includes('Hard skill lint'));
   assert.ok(guide.includes('em dashes'));
+  assert.ok(guide.includes('[First name],'));
   const dirty = lintDraft(
     'Quick question about finance',
     'Hope this finds you well — I wanted to compare notes.',
@@ -360,6 +424,43 @@ test('blocking hard lint still fails approve gate; overloaded alone does not', (
   assert.equal(hasHardLintFailures(softOnly), true);
   assert.equal(hasBlockingHardLintFailures(softOnly), false);
   assert.equal(hasMechanicalAutoRepairLintFailures(softOnly), false);
+});
+
+test('em dash plus temporal lint is mixed: mechanical repair, leftover judgment stays reviewable', () => {
+  const mixed: LintResult = {
+    hard: [
+      { code: 'EM_DASH', message: 'em dash', field: 'body', span: { start: 0, end: 1, text: '—' } },
+      {
+        code: 'RESEARCH_TIMELINESS_BLOCKED',
+        message: 'blocked',
+        field: 'combined',
+        span: { start: 0, end: 0, text: '' },
+      },
+    ],
+    warnings: [],
+  };
+  assert.equal(hasMechanicalAutoRepairLintFailures(mixed), true);
+  assert.equal(hasJudgmentHardLintFailures(mixed), true);
+  assert.equal(hasBlockingHardLintFailures(mixed), true);
+
+  const temporalOnly: LintResult = {
+    hard: [{
+      code: 'TEMPORAL_LEDGER_TEXT_MISSING',
+      message: 'ledger',
+      field: 'combined',
+      span: { start: 0, end: 4, text: 'body' },
+    }],
+    warnings: [],
+  };
+  assert.equal(hasMechanicalAutoRepairLintFailures(temporalOnly), false);
+  assert.equal(hasJudgmentHardLintFailures(temporalOnly), true);
+
+  const mechanicalOnly: LintResult = {
+    hard: [{ code: 'EM_DASH', message: 'em dash', field: 'body', span: { start: 0, end: 1, text: '—' } }],
+    warnings: [],
+  };
+  assert.equal(hasMechanicalAutoRepairLintFailures(mechanicalOnly), true);
+  assert.equal(hasJudgmentHardLintFailures(mechanicalOnly), false);
 });
 
 test('peer-benchmark / value-commitment closes hard-fail and block approve', () => {

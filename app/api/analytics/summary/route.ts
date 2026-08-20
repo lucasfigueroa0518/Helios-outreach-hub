@@ -14,6 +14,8 @@ export async function GET(request: NextRequest) {
     const campaignIdsRaw = searchParams.get('campaignIds');
     const tagsRaw = searchParams.get('tags');
     const userId = searchParams.get('userId');
+    const identitySlug = searchParams.get('identitySlug');
+    const fromEmail = searchParams.get('fromEmail');
 
     const campaignIds = campaignIdsRaw ? campaignIdsRaw.split(',').map((s) => s.trim()).filter(Boolean) : null;
     const tags = tagsRaw ? tagsRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : null;
@@ -25,6 +27,8 @@ export async function GET(request: NextRequest) {
       campaignIds,
       tags,
       userId,
+      identitySlug,
+      fromEmail,
     });
     return NextResponse.json(summary);
   } catch (error) {

@@ -39,6 +39,7 @@ export type ExtractionResult = {
   people: ExtractedPerson[];
   counted: number | null;
   warnings: string[];
+  billedUsage?: import('@/lib/anthropic-pricing').AnthropicUsageContract | null;
 };
 
 const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;

@@ -1010,6 +1010,113 @@ INSERT INTO outreach.billing_guard (id)
 VALUES ('cloud_worker')
 ON CONFLICT (id) DO NOTHING;
 
+-- ── Sender identities + outreach inboxes (Agent Mail) ────────────────────────
+
+CREATE TABLE IF NOT EXISTS outreach.sender_identities (
+    id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug                  text NOT NULL UNIQUE,
+    display_name          text NOT NULL,
+    title                 text NOT NULL,
+    company_name          text NOT NULL DEFAULT 'Helios Group',
+    headshot_public_path  text,
+    voice_notes           text,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_at            timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT sender_identities_slug_check CHECK (slug IN ('lucas', 'tommy'))
+);
+
+CREATE TABLE IF NOT EXISTS outreach.sender_inboxes (
+    id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    identity_id           uuid NOT NULL REFERENCES outreach.sender_identities (id) ON DELETE CASCADE,
+    email                 text NOT NULL,
+    sort_order            integer NOT NULL,
+    is_primary            boolean NOT NULL DEFAULT false,
+    enabled               boolean NOT NULL DEFAULT true,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_at            timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sender_inboxes_email_lower
+    ON outreach.sender_inboxes (lower(email));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sender_inboxes_identity_primary
+    ON outreach.sender_inboxes (identity_id)
+    WHERE is_primary;
+CREATE INDEX IF NOT EXISTS idx_sender_inboxes_identity_sort
+    ON outreach.sender_inboxes (identity_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS outreach.org_settings (
+    key                   text PRIMARY KEY,
+    value                 jsonb NOT NULL,
+    updated_at            timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO outreach.org_settings (key, value)
+VALUES ('daily_inbox_cap', '10'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO outreach.sender_identities (slug, display_name, title, company_name, headshot_public_path)
+VALUES
+  ('lucas', 'Lucas Figueroa', 'President', 'Helios Group', '/signatures/lucas-figueroa.jpg'),
+  ('tommy', 'Thomas Pozo', 'Partner', 'Helios Group', '/signatures/thomas-pozo.jpg')
+ON CONFLICT (slug) DO UPDATE
+   SET display_name = EXCLUDED.display_name,
+       title = EXCLUDED.title,
+       company_name = EXCLUDED.company_name,
+       headshot_public_path = EXCLUDED.headshot_public_path,
+       updated_at = now();
+
+INSERT INTO outreach.sender_inboxes (identity_id, email, sort_order, is_primary)
+SELECT i.id, v.email, v.sort_order, v.is_primary
+  FROM outreach.sender_identities i
+  JOIN (
+    VALUES
+      ('lucas', 'lucas@heliosgroup.email', 1, true),
+      ('lucas', 'lucas@heliosgroup.online', 2, false),
+      ('lucas', 'l.figueroa@heliosgroup.email', 3, false),
+      ('lucas', 'lfigueroa@heliosgroup.email', 4, false),
+      ('tommy', 'thomas@heliosgroup.email', 1, true),
+      ('tommy', 'tommy@heliosgroup.email', 2, false),
+      ('tommy', 'thomas@heliosgroup.online', 3, false)
+  ) AS v(slug, email, sort_order, is_primary) ON v.slug = i.slug
+ON CONFLICT (lower(email)) DO UPDATE
+   SET identity_id = EXCLUDED.identity_id,
+       sort_order = EXCLUDED.sort_order,
+       is_primary = EXCLUDED.is_primary,
+       enabled = true,
+       updated_at = now();
+
+DELETE FROM outreach.sender_inboxes
+ WHERE lower(email) = 'tommy@heliosgroup.online'
+   AND EXISTS (
+     SELECT 1 FROM outreach.sender_inboxes WHERE lower(email) = 'thomas@heliosgroup.online'
+   );
+UPDATE outreach.sender_inboxes
+   SET email = 'thomas@heliosgroup.online', updated_at = now()
+ WHERE lower(email) = 'tommy@heliosgroup.online';
+
+ALTER TABLE outreach.email_send_queue
+    ADD COLUMN IF NOT EXISTS sender_identity_id uuid REFERENCES outreach.sender_identities (id),
+    ADD COLUMN IF NOT EXISTS sender_inbox_id uuid REFERENCES outreach.sender_inboxes (id),
+    ADD COLUMN IF NOT EXISTS from_email text;
+
+CREATE INDEX IF NOT EXISTS idx_email_send_queue_inbox_date
+    ON outreach.email_send_queue (sender_inbox_id, schedule_date)
+    WHERE status IN ('queued', 'sending');
+CREATE INDEX IF NOT EXISTS idx_email_send_queue_identity_date
+    ON outreach.email_send_queue (sender_identity_id, schedule_date);
+
+ALTER TABLE outreach.email_sends
+    ADD COLUMN IF NOT EXISTS sender_inbox_id uuid REFERENCES outreach.sender_inboxes (id),
+    ADD COLUMN IF NOT EXISTS provider_thread_id text;
+
+CREATE INDEX IF NOT EXISTS idx_email_sends_inbox_sent
+    ON outreach.email_sends (sender_inbox_id, sent_at)
+    WHERE status = 'sent';
+CREATE INDEX IF NOT EXISTS idx_email_sends_from_email_lower
+    ON outreach.email_sends (lower(from_email));
+CREATE INDEX IF NOT EXISTS idx_email_sends_provider_thread_id
+    ON outreach.email_sends (provider_thread_id);
+
 GRANT USAGE ON SCHEMA outreach TO postgres, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA outreach TO postgres, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA outreach TO postgres, service_role;

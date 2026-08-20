@@ -1,10 +1,13 @@
 import {
   agentMailGetMessage,
+  agentMailInboxId,
   agentMailListMessages,
   agentMailSendProbe,
   type AgentMailMessageItem,
   type AgentMailSendResult,
 } from '@/lib/agentmail';
+import { assertVerifyInbox } from '@/lib/agentmail-inboxes';
+import { isAgentMailAccountSendingPausedError } from '@/lib/drafting/agentmail-send-errors';
 import { dbQuery } from '@/lib/db';
 import {
   buildDisambiguation,
@@ -23,6 +26,7 @@ export function isAgentMailRateLimitError(error: unknown) {
 
 /** AgentMail permanently blocked/bounced the recipient — treat as invalid, do not retry. */
 export function isAgentMailRecipientBlockedError(error: unknown) {
+  if (isAgentMailAccountSendingPausedError(error)) return false;
   const message = error instanceof Error ? error.message : String(error);
   return /message_rejected/i.test(message)
     || /recipient\(s\) blocked/i.test(message)
@@ -541,7 +545,7 @@ export async function probeMailboxEmail(
 
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const sendProbe = options.sendProbe ?? agentMailSendProbe;
-  const inboxId = options.inboxId ?? (process.env.AGENTMAIL_INBOX_ID?.trim() || 'lafwh@agentmail.to');
+  const inboxId = assertVerifyInbox(options.inboxId ?? agentMailInboxId());
 
   let sent: AgentMailSendResult;
   try {

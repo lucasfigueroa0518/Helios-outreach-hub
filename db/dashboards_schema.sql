@@ -113,6 +113,10 @@ CREATE TABLE IF NOT EXISTS dashboards.context_updates (
                       CHECK (generated_by IN ('CRON', 'MANUAL', 'WORKER'))
 );
 
+ALTER TABLE dashboards.context_updates
+    ADD COLUMN IF NOT EXISTS actual_cost_usd numeric(10, 4) NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS usage jsonb NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE INDEX IF NOT EXISTS idx_dashboards_context_updates_project_generated
     ON dashboards.context_updates (project_id, generated_at DESC);
 

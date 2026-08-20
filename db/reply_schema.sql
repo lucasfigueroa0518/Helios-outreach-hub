@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS outreach.reply_sends (
     updated_at              timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE outreach.reply_sends
+    ADD COLUMN IF NOT EXISTS actual_cost_usd numeric(10, 4) NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS usage jsonb NOT NULL DEFAULT '{}'::jsonb;
+
 DO $$
 BEGIN
     IF NOT EXISTS (

@@ -2,6 +2,12 @@
  * Outreach Analytics Hub engine with multi-filtering and spend + conversion metrics.
  */
 
+import { SENDER_IDENTITY_DEFAULTS } from '@/lib/agentmail-inboxes';
+import {
+  completeUtcDaysInWindow,
+  loadAnthropicBilledUsd,
+  loadAttributedCostRows,
+} from '@/lib/analytics-attributed-cost';
 import { getCloudWorkerSpendState } from '@/lib/billing-guard';
 import { dbQuery } from '@/lib/db';
 
@@ -17,10 +23,12 @@ export type AnalyticsMetricBlock = {
   // Volume & Conversion
   emails_sent: number;
   emails_delivered: number;
+  emails_bounced: number;
   emails_opened: number;
   emails_clicked: number;
   emails_replied: number;
   delivery_rate: number | null;
+  bounce_rate: number | null;
   open_rate: number | null;
   click_rate: number | null;
   reply_rate: number | null;
@@ -35,9 +43,12 @@ export type AnalyticsMetricBlock = {
   drafts_revised: number;
   edit_rate: number | null;
 
-  // Spend & Costs
+  // Spend & Costs (work-row UNION; not lead_cost_events)
   enrichment_cost_usd: number;
   drafting_cost_usd: number;
+  reply_cost_usd: number;
+  extraction_cost_usd: number;
+  dashboard_cost_usd: number;
   unattributed_cost_usd: number;
   total_spend_usd: number;
   spend_per_lead_usd: number | null;
@@ -59,6 +70,17 @@ export type AnalyticsUserRow = AnalyticsMetricBlock & {
   user_name: string | null;
 };
 
+export type AnalyticsInboxRow = AnalyticsMetricBlock & {
+  from_email: string;
+  identity_slug: string;
+};
+
+export type AnalyticsIdentityRow = AnalyticsMetricBlock & {
+  identity_slug: string;
+  display_name: string;
+  inboxes: AnalyticsInboxRow[];
+};
+
 export type AnalyticsCampaignRow = {
   campaign_id: string;
   campaign_name: string;
@@ -70,15 +92,19 @@ export type AnalyticsCampaignRow = {
   lead_count: number;
   emails_sent: number;
   emails_delivered: number;
+  emails_bounced: number;
   emails_opened: number;
   emails_clicked: number;
   emails_replied: number;
   delivery_rate: number | null;
+  bounce_rate: number | null;
   open_rate: number | null;
   click_rate: number | null;
   reply_rate: number | null;
   enrichment_cost_usd: number;
   drafting_cost_usd: number;
+  reply_cost_usd: number;
+  extraction_cost_usd: number;
   total_spend_usd: number;
   spend_per_lead_usd: number | null;
   created_at: string;
@@ -88,6 +114,8 @@ export type AnalyticsSummaryFilters = {
   campaignIds?: string[] | null;
   tags?: string[] | null;
   userId?: string | null;
+  identitySlug?: string | null;
+  fromEmail?: string | null;
 };
 
 export type CloudWorkerSpendSummary = {
@@ -98,16 +126,31 @@ export type CloudWorkerSpendSummary = {
   detail: string | null;
 };
 
+export type AnthropicSpendReconciliation = {
+  billed_usd: number;
+  attributed_usd: number;
+  variance_usd: number;
+  billed_from_day: string | null;
+  billed_to_day: string | null;
+  today_incomplete: boolean;
+};
+
 export type AnalyticsSummary = {
   window: AnalyticsWindow;
   filters: {
     campaignIds: string[];
     tags: string[];
     userId: string | null;
+    identitySlug: string | null;
+    fromEmail: string | null;
   };
+  available_identities: { slug: string; name: string }[];
+  available_inboxes: { email: string; identity_slug: string }[];
   aggregate: AnalyticsMetricBlock;
   cloud_worker_spend: CloudWorkerSpendSummary;
+  anthropic_spend: AnthropicSpendReconciliation;
   by_user: AnalyticsUserRow[];
+  by_identity: AnalyticsIdentityRow[];
   by_campaign: AnalyticsCampaignRow[];
   available_tags: string[];
   available_campaigns: { id: string; name: string; tags: string[] }[];
@@ -139,10 +182,12 @@ function emptyMetrics(): AnalyticsMetricBlock {
   return {
     emails_sent: 0,
     emails_delivered: 0,
+    emails_bounced: 0,
     emails_opened: 0,
     emails_clicked: 0,
     emails_replied: 0,
     delivery_rate: null,
+    bounce_rate: null,
     open_rate: null,
     click_rate: null,
     reply_rate: null,
@@ -156,6 +201,9 @@ function emptyMetrics(): AnalyticsMetricBlock {
     edit_rate: null,
     enrichment_cost_usd: 0,
     drafting_cost_usd: 0,
+    reply_cost_usd: 0,
+    extraction_cost_usd: 0,
+    dashboard_cost_usd: 0,
     unattributed_cost_usd: 0,
     total_spend_usd: 0,
     spend_per_lead_usd: null,
@@ -180,13 +228,31 @@ function perUnit(total: number, count: number): number | null {
   return total / count;
 }
 
+function attributedSpendUsd(m: Pick<
+  AnalyticsMetricBlock,
+  | 'drafting_cost_usd'
+  | 'enrichment_cost_usd'
+  | 'reply_cost_usd'
+  | 'extraction_cost_usd'
+  | 'dashboard_cost_usd'
+>): number {
+  return (
+    m.drafting_cost_usd
+    + m.enrichment_cost_usd
+    + m.reply_cost_usd
+    + m.extraction_cost_usd
+    + m.dashboard_cost_usd
+  );
+}
+
 function finalizeMetrics<T extends AnalyticsMetricBlock>(m: T): T {
-  const total_spend = m.drafting_cost_usd + m.enrichment_cost_usd;
+  const total_spend = attributedSpendUsd(m);
   const baseDenominator = m.emails_delivered > 0 ? m.emails_delivered : m.emails_sent;
   return {
     ...m,
     total_spend_usd: total_spend,
     delivery_rate: rate(m.emails_delivered, m.emails_sent),
+    bounce_rate: rate(m.emails_bounced, m.emails_sent),
     open_rate: rate(m.emails_opened, baseDenominator),
     click_rate: rate(m.emails_clicked, baseDenominator),
     reply_rate: rate(m.emails_replied, baseDenominator),
@@ -286,6 +352,8 @@ export async function getAnalyticsSummary(input: {
   campaignIds?: string[] | null;
   tags?: string[] | null;
   userId?: string | null;
+  identitySlug?: string | null;
+  fromEmail?: string | null;
 }): Promise<AnalyticsSummary> {
   const window = resolveAnalyticsWindow(input);
   const excludedRunIds = await loadExcludedRunIds();
@@ -294,6 +362,8 @@ export async function getAnalyticsSummary(input: {
   const cleanCampaignIds = input.campaignIds?.filter(Boolean) ?? [];
   const cleanTags = input.tags?.map((t) => t.trim().toLowerCase()).filter(Boolean) ?? [];
   const cleanUserId = input.userId?.trim() || null;
+  const cleanIdentitySlug = input.identitySlug?.trim().toLowerCase() || null;
+  const cleanFromEmail = input.fromEmail?.trim().toLowerCase() || null;
 
   // 1. Fetch available filter options (tags, active campaigns, users)
   const [tagsRes, campaignsRes, usersRes] = await Promise.all([
@@ -359,8 +429,11 @@ export async function getAnalyticsSummary(input: {
     user_id: string;
     user_email: string | null;
     user_name: string | null;
+    identity_slug: string | null;
+    from_email: string | null;
     emails_sent: string;
     emails_delivered: string;
+    emails_bounced: string;
     emails_opened: string;
     emails_clicked: string;
     emails_replied: string;
@@ -373,10 +446,13 @@ export async function getAnalyticsSummary(input: {
        c.owner_id::text AS user_id,
        u.email AS user_email,
        u.display_name AS user_name,
+       si.slug AS identity_slug,
+       lower(s.from_email) AS from_email,
        count(*) FILTER (
          WHERE i.delivery_snapshot ? 'sentAt' OR i.delivery_snapshot ? 'gmailMessageId' OR s.status = 'sent'
        )::text AS emails_sent,
        count(*) FILTER (WHERE s.delivered_at IS NOT NULL)::text AS emails_delivered,
+       count(*) FILTER (WHERE s.bounced_at IS NOT NULL OR s.status = 'bounced')::text AS emails_bounced,
        count(*) FILTER (WHERE s.opened_at IS NOT NULL)::text AS emails_opened,
        count(*) FILTER (WHERE s.clicked_at IS NOT NULL)::text AS emails_clicked,
        count(*) FILTER (WHERE s.replied_at IS NOT NULL)::text AS emails_replied,
@@ -390,90 +466,37 @@ export async function getAnalyticsSummary(input: {
      JOIN outreach.campaigns c ON c.id = w.campaign_id
      JOIN outreach.users u ON u.id = c.owner_id
      LEFT JOIN outreach.email_drafts d ON d.drafting_item_id = i.id
-     LEFT JOIN outreach.email_sends s ON s.drafting_item_id = i.id AND s.status = 'sent'
+     LEFT JOIN outreach.email_sends s ON s.drafting_item_id = i.id AND s.status IN ('sent', 'bounced')
+     LEFT JOIN outreach.sender_inboxes ib ON ib.id = s.sender_inbox_id OR lower(ib.email) = lower(s.from_email)
+     LEFT JOIN outreach.sender_identities si ON si.id = ib.identity_id
      WHERE i.updated_at >= $1::timestamptz
        AND i.updated_at <= $2::timestamptz
        AND ($3::uuid[] IS NULL OR cardinality($3::uuid[]) = 0 OR c.id = ANY($3::uuid[]))
        AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR i.lead_id <> ALL($4::uuid[]))
-     GROUP BY c.id, c.owner_id, u.email, u.display_name`,
+       AND ($5::text IS NULL OR si.slug = $5)
+       AND ($6::text IS NULL OR lower(s.from_email) = $6)
+     GROUP BY c.id, c.owner_id, u.email, u.display_name, si.slug, s.from_email`,
     [
       window.from,
       window.to,
       matchedCampaignIds.length ? matchedCampaignIds : ['00000000-0000-0000-0000-000000000000'],
       excludedLeadList.length ? excludedLeadList : null,
+      cleanIdentitySlug,
+      cleanFromEmail,
     ],
   );
 
-  // 4. Cost Statistics grouped by campaign & user
-  const { rows: costRows } = await dbQuery<{
-    campaign_id: string;
-    user_id: string;
-    phase: 'enrichment' | 'drafting';
-    cost_usd: string;
-    event_count: string;
-    unattributed_cost_usd: string;
-  }>(
-    `WITH cost_rows AS (
-       SELECT
-         c.id::text AS campaign_id,
-         c.owner_id::text AS user_id,
-         'enrichment'::text AS phase,
-         e.actual_cost_usd AS cost_usd,
-         e.lead_id,
-         0::numeric AS unattributed_cost_usd
-       FROM outreach.lead_cost_events e
-       JOIN outreach.campaigns c ON c.id = e.campaign_id
-       WHERE e.created_at >= $1::timestamptz
-         AND e.created_at <= $2::timestamptz
-         AND e.phase = 'enrichment'
-         AND ($3::uuid[] IS NULL OR cardinality($3::uuid[]) = 0 OR c.id = ANY($3::uuid[]))
-         AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR e.lead_id <> ALL($4::uuid[]))
-       UNION ALL
-       SELECT
-         c.id::text AS campaign_id,
-         c.owner_id::text,
-         'drafting'::text,
-         event.actual_cost_usd,
-         item.lead_id,
-         0::numeric
-       FROM outreach.drafting_job_cost_events event
-       JOIN outreach.drafting_items item ON item.id = event.drafting_item_id
-       JOIN outreach.drafting_workspaces workspace ON workspace.id = item.workspace_id
-       JOIN outreach.campaigns c ON c.id = workspace.campaign_id
-       WHERE event.created_at >= $1::timestamptz
-         AND event.created_at <= $2::timestamptz
-         AND ($3::uuid[] IS NULL OR cardinality($3::uuid[]) = 0 OR c.id = ANY($3::uuid[]))
-         AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR item.lead_id <> ALL($4::uuid[]))
-       UNION ALL
-       SELECT
-         c.id::text AS campaign_id,
-         c.owner_id::text,
-         'drafting'::text,
-         opening.actual_cost_usd,
-         NULL::uuid,
-         opening.actual_cost_usd
-       FROM outreach.drafting_run_cost_opening_balances opening
-       JOIN outreach.campaigns c ON c.id = opening.campaign_id
-       WHERE opening.occurred_at >= $1::timestamptz
-         AND opening.occurred_at <= $2::timestamptz
-         AND ($3::uuid[] IS NULL OR cardinality($3::uuid[]) = 0 OR c.id = ANY($3::uuid[]))
-     )
-     SELECT
-       campaign_id,
-       user_id,
-       phase,
-       coalesce(sum(cost_usd), 0)::text AS cost_usd,
-       count(DISTINCT lead_id)::text AS event_count,
-       coalesce(sum(unattributed_cost_usd), 0)::text AS unattributed_cost_usd
-     FROM cost_rows
-     GROUP BY campaign_id, user_id, phase`,
-    [
-      window.from,
-      window.to,
-      matchedCampaignIds.length ? matchedCampaignIds : ['00000000-0000-0000-0000-000000000000'],
-      excludedLeadList.length ? excludedLeadList : null,
-    ],
-  );
+  // 4. Cost Statistics from work-row UNION (not lead_cost_events)
+  const safeCampaignIds = matchedCampaignIds.length
+    ? matchedCampaignIds
+    : ['00000000-0000-0000-0000-000000000000'];
+  const costRows = await loadAttributedCostRows({
+    from: window.from,
+    to: window.to,
+    campaignIds: safeCampaignIds,
+    excludedLeadIds: excludedLeadList,
+    excludedRunIds: excludedRunIds,
+  });
 
   // 5. Orchestration Job Statistics
   const { rows: jobRows } = await dbQuery<{
@@ -505,15 +528,59 @@ export async function getAnalyticsSummary(input: {
   );
 
   const byUser = new Map<string, AnalyticsUserRow>();
+  const byIdentity = new Map<string, AnalyticsIdentityRow>();
   const campaignMetrics = new Map<string, {
     emails_sent: number;
     emails_delivered: number;
+    emails_bounced: number;
     emails_opened: number;
     emails_clicked: number;
     emails_replied: number;
     enrichment_cost_usd: number;
     drafting_cost_usd: number;
+    reply_cost_usd: number;
+    extraction_cost_usd: number;
   }>();
+
+  function emptyCampaignMetrics() {
+    return {
+      emails_sent: 0,
+      emails_delivered: 0,
+      emails_bounced: 0,
+      emails_opened: 0,
+      emails_clicked: 0,
+      emails_replied: 0,
+      enrichment_cost_usd: 0,
+      drafting_cost_usd: 0,
+      reply_cost_usd: 0,
+      extraction_cost_usd: 0,
+    };
+  }
+
+  function ensureIdentity(slug: string): AnalyticsIdentityRow {
+    const key = slug === 'tommy' ? 'tommy' : 'lucas';
+    let row = byIdentity.get(key);
+    if (!row) {
+      row = {
+        identity_slug: key,
+        display_name: SENDER_IDENTITY_DEFAULTS[key].displayName,
+        inboxes: [],
+        ...emptyMetrics(),
+      };
+      byIdentity.set(key, row);
+    }
+    return row;
+  }
+
+  function ensureInbox(identity: AnalyticsIdentityRow, fromEmail: string): AnalyticsInboxRow {
+    const email = fromEmail.trim().toLowerCase();
+    let inbox = identity.inboxes.find((row) => row.from_email === email);
+    if (!inbox) {
+      inbox = { from_email: email, identity_slug: identity.identity_slug, ...emptyMetrics() };
+      identity.inboxes.push(inbox);
+    }
+    return inbox;
+  }
 
   const aggregate = emptyMetrics();
   aggregate.campaigns_count = matchingCampaigns.length;
@@ -528,15 +595,19 @@ export async function getAnalyticsSummary(input: {
     const user = ensureUser(byUser, row.user_id, row.user_email, row.user_name);
     const sent = Number(row.emails_sent);
     const delivered = Number(row.emails_delivered);
+    const bounced = Number(row.emails_bounced);
     const opened = Number(row.emails_opened);
     const clicked = Number(row.emails_clicked);
     const replied = Number(row.emails_replied);
     const approved = Number(row.drafts_approved);
     const denied = Number(row.drafts_denied);
     const edited = Number(row.drafts_edited);
+    const identity = ensureIdentity(row.identity_slug ?? 'lucas');
+    const inbox = row.from_email ? ensureInbox(identity, row.from_email) : null;
 
     user.emails_sent += sent;
     user.emails_delivered += delivered;
+    user.emails_bounced += bounced;
     user.emails_opened += opened;
     user.emails_clicked += clicked;
     user.emails_replied += replied;
@@ -545,8 +616,20 @@ export async function getAnalyticsSummary(input: {
     user.drafts_reviewed += approved + denied;
     user.drafts_revised += edited;
 
+    identity.emails_sent += sent;
+    identity.emails_delivered += delivered;
+    identity.emails_bounced += bounced;
+    identity.emails_replied += replied;
+    if (inbox) {
+      inbox.emails_sent += sent;
+      inbox.emails_delivered += delivered;
+      inbox.emails_bounced += bounced;
+      inbox.emails_replied += replied;
+    }
+
     aggregate.emails_sent += sent;
     aggregate.emails_delivered += delivered;
+    aggregate.emails_bounced += bounced;
     aggregate.emails_opened += opened;
     aggregate.emails_clicked += clicked;
     aggregate.emails_replied += replied;
@@ -555,45 +638,66 @@ export async function getAnalyticsSummary(input: {
     aggregate.drafts_reviewed += approved + denied;
     aggregate.drafts_revised += edited;
 
-    const cm = campaignMetrics.get(row.campaign_id) ?? {
-      emails_sent: 0,
-      emails_delivered: 0,
-      emails_opened: 0,
-      emails_clicked: 0,
-      emails_replied: 0,
-      enrichment_cost_usd: 0,
-      drafting_cost_usd: 0,
-    };
+    const cm = campaignMetrics.get(row.campaign_id) ?? emptyCampaignMetrics();
     cm.emails_sent += sent;
     cm.emails_delivered += delivered;
+    cm.emails_bounced += bounced;
     cm.emails_opened += opened;
     cm.emails_clicked += clicked;
     cm.emails_replied += replied;
     campaignMetrics.set(row.campaign_id, cm);
   }
 
+  const seenOrgEnrichment = new Set<string>();
+  const seenUserEnrichment = new Map<string, Set<string>>();
+
   for (const row of costRows) {
-    const user = ensureUser(byUser, row.user_id);
     const cost = Number(row.cost_usd);
     const events = Number(row.event_count);
     const unattributedCost = Number(row.unattributed_cost_usd);
-
-    const cm = campaignMetrics.get(row.campaign_id) ?? {
-      emails_sent: 0,
-      emails_delivered: 0,
-      emails_opened: 0,
-      emails_clicked: 0,
-      emails_replied: 0,
-      enrichment_cost_usd: 0,
-      drafting_cost_usd: 0,
-    };
+    const user = row.user_id ? ensureUser(byUser, row.user_id) : null;
+    const cm = row.campaign_id
+      ? (campaignMetrics.get(row.campaign_id) ?? emptyCampaignMetrics())
+      : null;
 
     if (row.phase === 'enrichment') {
-      user.enrichment_cost_usd += cost;
-      user.enrichment_lead_events += events;
-      aggregate.enrichment_cost_usd += cost;
-      aggregate.enrichment_lead_events += events;
-      cm.enrichment_cost_usd += cost;
+      const jobKey = row.source_id ?? `${row.campaign_id}:${row.user_id}`;
+      if (cm && row.campaign_id) {
+        cm.enrichment_cost_usd += cost;
+        campaignMetrics.set(row.campaign_id, cm);
+      }
+      if (user) {
+        const userSeen = seenUserEnrichment.get(user.user_id) ?? new Set<string>();
+        if (!userSeen.has(jobKey)) {
+          user.enrichment_cost_usd += cost;
+          user.enrichment_lead_events += 1;
+          userSeen.add(jobKey);
+          seenUserEnrichment.set(user.user_id, userSeen);
+        }
+      }
+      if (!seenOrgEnrichment.has(jobKey)) {
+        aggregate.enrichment_cost_usd += cost;
+        aggregate.enrichment_lead_events += 1;
+        seenOrgEnrichment.add(jobKey);
+      }
+      continue;
+    }
+
+    if (row.phase === 'dashboards') {
+      aggregate.dashboard_cost_usd += cost;
+      continue;
+    }
+
+    if (!user || !cm || !row.campaign_id) continue;
+
+    if (row.phase === 'replies') {
+      user.reply_cost_usd += cost;
+      aggregate.reply_cost_usd += cost;
+      cm.reply_cost_usd += cost;
+    } else if (row.phase === 'extraction') {
+      user.extraction_cost_usd += cost;
+      aggregate.extraction_cost_usd += cost;
+      cm.extraction_cost_usd += cost;
     } else {
       user.drafting_cost_usd += cost;
       user.unattributed_cost_usd += unattributedCost;
@@ -625,17 +729,10 @@ export async function getAnalyticsSummary(input: {
   }
 
   const by_campaign: AnalyticsCampaignRow[] = matchingCampaigns.map((camp) => {
-    const cm = campaignMetrics.get(camp.id) ?? {
-      emails_sent: 0,
-      emails_delivered: 0,
-      emails_opened: 0,
-      emails_clicked: 0,
-      emails_replied: 0,
-      enrichment_cost_usd: 0,
-      drafting_cost_usd: 0,
-    };
+    const cm = campaignMetrics.get(camp.id) ?? emptyCampaignMetrics();
     const leadCount = Number(camp.lead_count);
-    const totalSpend = cm.enrichment_cost_usd + cm.drafting_cost_usd;
+    const totalSpend =
+      cm.enrichment_cost_usd + cm.drafting_cost_usd + cm.reply_cost_usd + cm.extraction_cost_usd;
     const baseDenominator = cm.emails_delivered > 0 ? cm.emails_delivered : cm.emails_sent;
 
     return {
@@ -649,15 +746,19 @@ export async function getAnalyticsSummary(input: {
       lead_count: leadCount,
       emails_sent: cm.emails_sent,
       emails_delivered: cm.emails_delivered,
+      emails_bounced: cm.emails_bounced,
       emails_opened: cm.emails_opened,
       emails_clicked: cm.emails_clicked,
       emails_replied: cm.emails_replied,
       delivery_rate: rate(cm.emails_delivered, cm.emails_sent),
+      bounce_rate: rate(cm.emails_bounced, cm.emails_sent),
       open_rate: rate(cm.emails_opened, baseDenominator),
       click_rate: rate(cm.emails_clicked, baseDenominator),
       reply_rate: rate(cm.emails_replied, baseDenominator),
       enrichment_cost_usd: cm.enrichment_cost_usd,
       drafting_cost_usd: cm.drafting_cost_usd,
+      reply_cost_usd: cm.reply_cost_usd,
+      extraction_cost_usd: cm.extraction_cost_usd,
       total_spend_usd: totalSpend,
       spend_per_lead_usd: perUnit(totalSpend, leadCount),
       created_at: camp.created_at ? new Date(camp.created_at).toISOString() : new Date().toISOString(),
@@ -673,18 +774,62 @@ export async function getAnalyticsSummary(input: {
     detail: workerSpend.detail,
   };
 
+  const finalizedAggregate = finalizeMetrics(aggregate);
+  const billedDays = completeUtcDaysInWindow(window);
+  let billedUsd = 0;
+  try {
+    billedUsd = billedDays
+      ? await loadAnthropicBilledUsd(billedDays.fromDay, billedDays.toDay)
+      : 0;
+  } catch {
+    billedUsd = 0;
+  }
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const anthropic_spend: AnthropicSpendReconciliation = {
+    billed_usd: billedUsd,
+    attributed_usd: finalizedAggregate.total_spend_usd,
+    variance_usd: billedUsd - finalizedAggregate.total_spend_usd,
+    billed_from_day: billedDays?.fromDay ?? null,
+    billed_to_day: billedDays?.toDay ?? null,
+    today_incomplete: window.to.slice(0, 10) >= todayUtc,
+  };
+
   return {
     window,
     filters: {
       campaignIds: cleanCampaignIds,
       tags: cleanTags,
       userId: cleanUserId,
+      identitySlug: cleanIdentitySlug,
+      fromEmail: cleanFromEmail,
     },
-    aggregate: finalizeMetrics(aggregate),
+    available_identities: [
+      { slug: 'lucas', name: 'Lucas Figueroa' },
+      { slug: 'tommy', name: 'Thomas Pozo' },
+    ],
+    available_inboxes: [
+      { email: 'lucas@heliosgroup.email', identity_slug: 'lucas' },
+      { email: 'lucas@heliosgroup.online', identity_slug: 'lucas' },
+      { email: 'l.figueroa@heliosgroup.email', identity_slug: 'lucas' },
+      { email: 'lfigueroa@heliosgroup.email', identity_slug: 'lucas' },
+      { email: 'thomas@heliosgroup.email', identity_slug: 'tommy' },
+      { email: 'tommy@heliosgroup.email', identity_slug: 'tommy' },
+      { email: 'thomas@heliosgroup.online', identity_slug: 'tommy' },
+    ],
+    aggregate: finalizedAggregate,
     cloud_worker_spend,
+    anthropic_spend,
     by_user: [...byUser.values()]
       .map((row) => finalizeMetrics(row))
-      .sort((a, b) => (b.drafting_cost_usd + b.enrichment_cost_usd) - (a.drafting_cost_usd + a.enrichment_cost_usd)),
+      .sort((a, b) => b.total_spend_usd - a.total_spend_usd),
+    by_identity: [...byIdentity.values()]
+      .map((row) => ({
+        ...finalizeMetrics(row),
+        inboxes: row.inboxes
+          .map((inbox) => finalizeMetrics(inbox))
+          .sort((a, b) => b.emails_sent - a.emails_sent),
+      }))
+      .sort((a, b) => b.emails_sent - a.emails_sent),
     by_campaign,
     available_tags,
     available_campaigns,
@@ -696,6 +841,9 @@ export async function getAnalyticsSummary(input: {
       'Denied proxy = rewrite-path drafting item states (queued_rewrite / rewriting / failed_rewrite).',
       'Excluded runs drop leads via campaign_leads.run_id and leads.source_run_id.',
       'Drafting totals include immutable legacy_unattributed opening balances; per-lead counts never receive that historical residual.',
+      'Hub attributed Claude is a UNION of work rows (drafting events, company research jobs, reply drafts, extraction, dashboard summaries). Shared company research jobs count once in org total and under every intersecting campaign when filtered.',
+      'Anthropic billed is org/day from the Cost API over complete UTC days only — it does not split by campaign. Today may lag ~5 minutes and is excluded from billed.',
+      'Variance = billed − attributed. Typical causes: unrecorded calls, Playground usage, Cost API lag, incomplete UTC day, or campaign filters on attributed only.',
       'Cloud worker (GCP) is project billable spend from budget notifications — infra cost, not attributed per campaign/lead.',
     ],
   };

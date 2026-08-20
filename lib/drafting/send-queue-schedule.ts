@@ -4,10 +4,15 @@
  */
 
 export const SEND_QUEUE_TIMEZONE = 'America/New_York';
-export const DAILY_SEND_CAP = 20;
+/** @deprecated Per-user cap. Outreach now uses per-inbox cap from org_settings (10|20). */
+export const DAILY_SEND_CAP = 10;
 export const SEND_WINDOW_START_HOUR = 9;
 export const SEND_WINDOW_END_HOUR = 17;
 export const SEND_SLOT_MIN_GAP_MS = 120_000;
+/** Live queue board: today through this many days ahead. */
+export const SEND_QUEUE_LIVE_HORIZON_DAYS = 14;
+/** Extra calendar days before today, so the board can scroll back one week. */
+export const SEND_QUEUE_LOOKBACK_DAYS = 7;
 
 export type OverflowSlot = {
   scheduleDate: string;
@@ -45,6 +50,17 @@ export function addCalendarDays(dateStr: string, days: number): string {
   const utc = new Date(Date.UTC(y, m - 1, d));
   utc.setUTCDate(utc.getUTCDate() + days);
   return `${utc.getUTCFullYear()}-${pad2(utc.getUTCMonth() + 1)}-${pad2(utc.getUTCDate())}`;
+}
+
+/**
+ * Queue board date window: prior 7 NY days through today + 14.
+ * The UI starts scrolled to today so last week is reachable by scrolling left.
+ */
+export function sendQueueBoardWindow(today: string): { from: string; to: string } {
+  return {
+    from: addCalendarDays(today, -SEND_QUEUE_LOOKBACK_DAYS),
+    to: addCalendarDays(today, SEND_QUEUE_LIVE_HORIZON_DAYS),
+  };
 }
 
 function nyParts(date: Date): { dateStr: string; hour: number; minute: number } {
@@ -189,4 +205,72 @@ export function computeShareTransferCount(
 /** Remaining slots for a day given current usage. */
 export function remainingCapacity(used: number, cap = DAILY_SEND_CAP): number {
   return Math.max(0, cap - Math.max(0, used));
+}
+
+export type InboxSlot = OverflowSlot & {
+  inboxId: string;
+  email: string;
+};
+
+export type InboxDayUsage = Map<string, number>;
+
+function inboxDayKey(inboxId: string, date: string): string {
+  return `${inboxId}:${date}`;
+}
+
+/**
+ * Fill each inbox to `cap` on a day (sort order), then advance to the next day.
+ */
+export function allocateInboxSlots(input: {
+  count: number;
+  inboxes: Array<{ id: string; email: string }>;
+  usage: InboxDayUsage;
+  startNy: string;
+  cap: number;
+  rng?: () => number;
+}): InboxSlot[] {
+  if (input.inboxes.length === 0 || input.count <= 0) return [];
+  const rng = input.rng ?? Math.random;
+  const usage = new Map(input.usage);
+  const results: InboxSlot[] = [];
+  const timesByKey = new Map<string, Date[]>();
+
+  let day = input.startNy;
+  let guard = 0;
+  while (results.length < input.count && guard < 10_000) {
+    guard += 1;
+    let filledAny = false;
+    for (const inbox of input.inboxes) {
+      while (results.length < input.count) {
+        const key = inboxDayKey(inbox.id, day);
+        if ((usage.get(key) ?? 0) >= input.cap) break;
+        const existing = timesByKey.get(key) ?? [];
+        const scheduledFor = spacedRandomTime(day, existing, rng);
+        existing.push(scheduledFor);
+        timesByKey.set(key, existing);
+        usage.set(key, (usage.get(key) ?? 0) + 1);
+        results.push({
+          inboxId: inbox.id,
+          email: inbox.email,
+          scheduleDate: day,
+          scheduledFor,
+        });
+        filledAny = true;
+      }
+    }
+    if (!filledAny) day = addCalendarDays(day, 1);
+  }
+  return results;
+}
+
+export function inboxUsageKey(inboxId: string, date: string): string {
+  return inboxDayKey(inboxId, date);
+}
+
+/** After 5pm NY, new allocations start tomorrow so today columns do not go overdue. */
+export function allocationStartNy(now = new Date()): string {
+  const today = formatNyDate(now);
+  const hour = nyParts(now).hour;
+  if (hour >= SEND_WINDOW_END_HOUR) return addCalendarDays(today, 1);
+  return today;
 }

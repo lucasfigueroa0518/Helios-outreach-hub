@@ -168,6 +168,8 @@ export type ResearchReport = {
     reason: string;
   }>;
   promising_paths?: string[];
+  /** Priced Anthropic usage for this live job. Absent in stubs/offline. */
+  research_billed_usage?: import('@/lib/anthropic-pricing').AnthropicUsageContract;
 };
 
 const freeDomains = new Set([

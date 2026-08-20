@@ -6,7 +6,7 @@ import type { EmbarkCapability } from '@/lib/drafting/types';
 const DRAFTING_RESOURCES_DIR = path.join(process.cwd(), 'resources', 'drafting');
 
 const REQUIRED_FILES = {
-  skill: 'first-contact-outreach-v5.md',
+  skill: 'first-contact-outreach-v8.md',
   subjectLine: 'subject-line-v1.md',
   positioningText: 'helios-positioning-v1.md',
   positioningPdf: 'helios-positioning-v1.pdf',
@@ -190,7 +190,7 @@ export async function loadDraftingAssets(options: { forceReload?: boolean } = {}
   assertManifestHash('capabilities', capabilitiesHashed.sha256, capabilitiesManifest?.sha256);
 
   const catalog = JSON.parse(capabilitiesHashed.text) as EmbarkCapability[];
-  const skillVersion = skillManifest?.version ?? versionFromFilename(REQUIRED_FILES.skill, 'v5');
+  const skillVersion = skillManifest?.version ?? versionFromFilename(REQUIRED_FILES.skill, 'v8');
   const subjectLineVersion = subjectLineManifest?.version
     ?? versionFromFilename(REQUIRED_FILES.subjectLine, 'v1');
   const positioningVersion = positioningManifest?.version ?? versionFromFilename(REQUIRED_FILES.positioningText, 'v1');

@@ -1,12 +1,19 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 
 import type { SenderProfile } from '@/app/campaigns/[id]/draft/types';
-import { isLucasSenderEmail } from '@/lib/drafting/email-signature';
+import {
+  inferIdentitySlug,
+  SENDER_IDENTITY_DEFAULTS,
+  type SenderIdentitySlug,
+} from '@/lib/agentmail-inboxes';
 
-const LUCAS_EMAIL = 'lucas@heliosgroup.ai';
+const PRIMARY_INBOX: Record<SenderIdentitySlug, string> = {
+  lucas: 'lucas@heliosgroup.email',
+  tommy: 'thomas@heliosgroup.email',
+};
 
 export function SenderSetupModal({
   defaultDisplayName,
@@ -21,25 +28,23 @@ export function SenderSetupModal({
   onClose: () => void;
   onSaved: (profile: SenderProfile) => void;
 }) {
-  const lucasDefaults = isLucasSenderEmail(defaultWorkEmail);
+  const inferred = inferIdentitySlug({
+    workEmail: defaultWorkEmail,
+    displayName: defaultDisplayName,
+  });
 
   const [profileId, setProfileId] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState(
-    lucasDefaults ? 'Lucas Figueroa' : defaultDisplayName,
-  );
-  const [workEmail, setWorkEmail] = useState(
-    lucasDefaults ? LUCAS_EMAIL : defaultWorkEmail,
-  );
-  const [title, setTitle] = useState(lucasDefaults ? 'President' : '');
-  const [companyName, setCompanyName] = useState('Helios Group');
+  const [identitySlug, setIdentitySlug] = useState<SenderIdentitySlug>(inferred);
   const [voiceNotes, setVoiceNotes] = useState('');
   const [headshotPath, setHeadshotPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(
-    lucasDefaults ? '/signatures/lucas-figueroa.jpg' : null,
+    SENDER_IDENTITY_DEFAULTS[inferred].headshotPublicPath,
   );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+
+  const defaults = SENDER_IDENTITY_DEFAULTS[identitySlug];
 
   useEffect(() => {
     if (!open) return;
@@ -51,18 +56,20 @@ export function SenderSetupModal({
         if (!response.ok || cancelled) return;
         const profile = (data.profiles as SenderProfile[] | undefined)?.[0];
         if (!profile) return;
+        const slug = inferIdentitySlug({
+          workEmail: profile.work_email,
+          displayName: profile.display_name,
+        });
         setProfileId(profile.id);
-        setDisplayName(profile.display_name || (lucasDefaults ? 'Lucas Figueroa' : defaultDisplayName));
-        setWorkEmail(profile.work_email || (lucasDefaults ? LUCAS_EMAIL : defaultWorkEmail));
-        setTitle(profile.title || (lucasDefaults ? 'President' : ''));
-        setCompanyName(profile.company_name || 'Helios Group');
+        setIdentitySlug(slug);
         setVoiceNotes(profile.voice_notes ?? '');
         setHeadshotPath(profile.headshot_storage_path);
-        if (isLucasSenderEmail(profile.work_email)) {
-          setPreviewUrl('/signatures/lucas-figueroa.jpg');
-        } else if (profile.headshot_storage_path) {
-          setPreviewUrl(`/api/public/sender-headshots/${profile.id}?t=${Date.now()}`);
-        }
+        setPreviewUrl(
+          SENDER_IDENTITY_DEFAULTS[slug].headshotPublicPath
+          || (profile.headshot_storage_path
+            ? `/api/public/sender-headshots/${profile.id}?t=${Date.now()}`
+            : null),
+        );
       } catch {
         // Keep defaults if the profile list fails to load.
       }
@@ -70,20 +77,13 @@ export function SenderSetupModal({
     return () => {
       cancelled = true;
     };
-  }, [open, defaultDisplayName, defaultWorkEmail, lucasDefaults]);
+  }, [open]);
 
-  const lucasLocked = useMemo(
-    () => isLucasSenderEmail(workEmail),
-    [workEmail],
-  );
-
-  const canSubmit = Boolean(
-    displayName.trim()
-    && workEmail.trim()
-    && title.trim()
-    && companyName.trim()
-    && (lucasLocked || headshotPath),
-  );
+  function selectIdentity(slug: SenderIdentitySlug) {
+    setIdentitySlug(slug);
+    setPreviewUrl(SENDER_IDENTITY_DEFAULTS[slug].headshotPublicPath);
+    setError(null);
+  }
 
   if (!open) return null;
 
@@ -94,10 +94,10 @@ export function SenderSetupModal({
       const body = new FormData();
       body.set('file', file);
       if (profileId) body.set('profile_id', profileId);
-      body.set('display_name', displayName.trim());
-      body.set('work_email', workEmail.trim());
-      body.set('title', title.trim() || 'Team member');
-      body.set('company_name', companyName.trim() || 'Helios Group');
+      body.set('display_name', defaults.displayName);
+      body.set('work_email', PRIMARY_INBOX[identitySlug]);
+      body.set('title', defaults.title);
+      body.set('company_name', defaults.companyName);
 
       const response = await fetch('/api/sender-profiles/headshot', {
         method: 'POST',
@@ -121,14 +121,6 @@ export function SenderSetupModal({
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    if (!displayName.trim() || !title.trim()) {
-      setError('Name and position are required');
-      return;
-    }
-    if (!lucasLocked && !headshotPath) {
-      setError('Upload a signature headshot to continue');
-      return;
-    }
     setSaving(true);
     setError(null);
     const response = await fetch('/api/sender-profiles', {
@@ -136,10 +128,10 @@ export function SenderSetupModal({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: profileId ?? undefined,
-        display_name: displayName.trim(),
-        work_email: workEmail.trim(),
-        title: title.trim(),
-        company_name: companyName.trim() || 'Helios Group',
+        display_name: defaults.displayName,
+        work_email: PRIMARY_INBOX[identitySlug],
+        title: defaults.title,
+        company_name: defaults.companyName,
         headshot_storage_path: headshotPath,
         signature_mode: 'name_and_role',
         voice_notes: voiceNotes.trim() || null,
@@ -168,7 +160,7 @@ export function SenderSetupModal({
           <div>
             <div className="card__title" id="sender-setup-title">Sender setup</div>
             <div className="card__subtitle">
-              Name, position, and headshot are required — they power the email signature. You cannot start drafting without them.
+              Pick Lucas or Tommy. The specific From inbox is assigned when you queue — not here.
             </div>
           </div>
           <button type="button" className="dialog__close" onClick={onClose} aria-label="Close dialog">
@@ -177,70 +169,38 @@ export function SenderSetupModal({
         </div>
         <div className="card__body">
           <form className="login-form" onSubmit={(event) => void save(event)}>
-            <label className="field">
-              <span className="field__label">Sender name</span>
-              <input
-                className="field__input"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                required
-                autoComplete="name"
-              />
-            </label>
-            <label className="field">
-              <span className="field__label">Work email</span>
-              <input
-                className="field__input"
-                type="email"
-                value={workEmail}
-                onChange={(event) => setWorkEmail(event.target.value)}
-                required
-                autoComplete="email"
-              />
-            </label>
-            <label className="field">
-              <span className="field__label">Position / title</span>
-              <input
-                className="field__input"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                required
-              />
-            </label>
-            <label className="field">
-              <span className="field__label">Company name</span>
-              <input
-                className="field__input"
-                value={companyName}
-                onChange={(event) => setCompanyName(event.target.value)}
-                required
-              />
-            </label>
+            <div className="field">
+              <span className="field__label">Send as</span>
+              <div className="segmented" role="tablist">
+                {(['lucas', 'tommy'] as const).map((slug) => (
+                  <button
+                    key={slug}
+                    type="button"
+                    className={identitySlug === slug ? 'segmented__item segmented__item--active' : 'segmented__item'}
+                    onClick={() => selectIdentity(slug)}
+                  >
+                    {SENDER_IDENTITY_DEFAULTS[slug].displayName}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="field">
-              <span className="field__label">
-                Signature headshot (PNG or JPEG){lucasLocked ? '' : ' *'}
-              </span>
-              {lucasLocked ? (
-                <p className="field__hint">
-                  Your headshot is already configured for lucas@heliosgroup.ai.
-                </p>
-              ) : (
-                <input
-                  className="field__input"
-                  type="file"
-                  accept="image/png,image/jpeg"
-                  required={!headshotPath}
-                  disabled={uploading || saving}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) void uploadHeadshot(file);
-                  }}
-                />
-              )}
-              {!lucasLocked && !headshotPath ? (
-                <p className="field__hint">Required — upload before you can continue.</p>
-              ) : null}
+              <span className="field__label">Signature</span>
+              <p className="field__hint">
+                All {identitySlug === 'lucas' ? 'four Lucas' : 'three Tommy'} inboxes share this signature.
+                Headshot is optional — upload only if you want to replace the default.
+              </p>
+              <input
+                className="field__input"
+                type="file"
+                accept="image/png,image/jpeg"
+                disabled={uploading || saving}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void uploadHeadshot(file);
+                }}
+              />
               <div className="sender-signature-preview" aria-label="Signature preview">
                 {previewUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -249,9 +209,9 @@ export function SenderSetupModal({
                   <div className="sender-signature-preview__placeholder" />
                 )}
                 <div className="sender-signature-preview__text">
-                  <strong>{displayName.trim() || 'Full Name'}</strong>
-                  <span>{title.trim() || 'Position'}</span>
-                  <span>{companyName.trim() || 'Company Name'}</span>
+                  <strong>{defaults.displayName}</strong>
+                  <span>{defaults.title}</span>
+                  <span>{defaults.companyName}</span>
                 </div>
               </div>
               {uploading ? <p className="field__hint">Uploading headshot…</p> : null}
@@ -271,7 +231,7 @@ export function SenderSetupModal({
             <button
               className="btn btn--primary"
               type="submit"
-              disabled={saving || uploading || !canSubmit}
+              disabled={saving || uploading}
             >
               {saving ? 'Saving…' : 'Save and continue'}
             </button>

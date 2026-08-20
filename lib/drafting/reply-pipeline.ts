@@ -4,7 +4,12 @@
 
 import { dbQuery } from '@/lib/db';
 import { enqueueWork } from '@/lib/orchestration/repository';
-import { normalizeDraftText } from '@/lib/drafting/normalize';
+import {
+  AGENTMAIL_ACCOUNT_PAUSE_RETRY_MS,
+  isAgentMailAccountSendingPausedError,
+  nextAgentMailPauseRetryAt,
+} from '@/lib/drafting/agentmail-send-errors';
+import { extractFirstName, normalizeDraftBody } from '@/lib/drafting/normalize';
 import {
   deferUntilToScheduledFor,
   resolveDeferUntil,
@@ -16,7 +21,7 @@ import {
   countImmediateSentReplies,
   loadReplyThread,
 } from '@/lib/drafting/reply-thread';
-import { createResendClient, sendOutreachEmail } from '@/lib/drafting/send';
+import { sendOutreachEmail } from '@/lib/drafting/send';
 
 type ReplySendRow = {
   id: string;
@@ -68,6 +73,23 @@ async function markFailed(replySendId: string, message: string): Promise<void> {
   );
 }
 
+async function parkReplyForAgentMailPause(
+  replySendId: string,
+  message: string,
+  resumeStatus: 'queued' | 'scheduled',
+): Promise<void> {
+  const retryAt = nextAgentMailPauseRetryAt();
+  await dbQuery(
+    `UPDATE outreach.reply_sends
+        SET status = $2,
+            scheduled_for = $3::timestamptz,
+            error_message = $4,
+            updated_at = now()
+      WHERE id = $1`,
+    [replySendId, resumeStatus, retryAt.toISOString(), message.slice(0, 4_000)],
+  );
+}
+
 async function loadSenderContext(replySendId: string): Promise<{
   from_email: string;
   to_email: string;
@@ -103,7 +125,7 @@ async function loadSenderContext(replySendId: string): Promise<{
     `SELECT s.from_email,
             s.to_email,
             s.subject AS outbound_subject,
-            s.provider_rfc_message_id,
+            coalesce(s.reply_provider_email_id, s.provider_message_id, s.provider_rfc_message_id) AS provider_rfc_message_id,
             ib.subject AS inbound_subject,
             ib.text_body AS inbound_text,
             ib.html_body AS inbound_html,
@@ -159,15 +181,11 @@ async function sendAndRecord(input: {
     headshotStoragePath: input.ctx.headshot_storage_path,
     headers,
     linkifyReplyBody: true,
+    inReplyToMessageId: input.ctx.provider_rfc_message_id,
+    firstName: extractFirstName(input.ctx.lead_name),
   });
 
-  let providerRfcMessageId: string | null = null;
-  try {
-    const details = await createResendClient().emails.get(sendResult.providerMessageId);
-    providerRfcMessageId = details.data?.message_id?.trim() || null;
-  } catch {
-    // optional
-  }
+  const providerRfcMessageId = sendResult.providerMessageId;
 
   await dbQuery(
     `UPDATE outreach.reply_sends
@@ -305,6 +323,23 @@ async function processClaimedReply(
     deferReason: claimed.defer_reason,
   });
 
+  await dbQuery(
+    `UPDATE outreach.reply_sends
+        SET actual_cost_usd = $2::numeric,
+            usage = $3::jsonb,
+            model_id = coalesce($4, model_id),
+            prompt_version = coalesce($5, prompt_version),
+            updated_at = now()
+      WHERE id = $1`,
+    [
+      claimed.id,
+      draft.usage.costUsd ?? '0.0000',
+      JSON.stringify(draft.usage ?? {}),
+      draft.modelId ?? null,
+      draft.promptVersion ?? null,
+    ],
+  );
+
   // Follow-up drafts are forced to reply_now + calendly.
   const disposition = mode === 'followup' ? 'reply_now' : draft.disposition;
   const includeCalendly = mode === 'followup' ? true : draft.includeCalendly;
@@ -322,7 +357,7 @@ async function processClaimedReply(
   }
 
   const subject = replySubject(thread.outboundSubject || ctx.outbound_subject);
-  const bodyText = normalizeDraftText(draft.bodyText);
+  const bodyText = normalizeDraftBody(draft.bodyText, extractFirstName(ctx.lead_name));
 
   if (disposition === 'suppress') {
     await cancelScheduledFollowups(claimed.email_send_id, 'suppress');
@@ -389,10 +424,11 @@ async function processClaimedReply(
 }
 
 export async function processReplyRespond(replySendId: string): Promise<{
-  status: 'sent' | 'failed' | 'skipped' | 'not_ready';
+  status: 'sent' | 'failed' | 'skipped' | 'not_ready' | 'provider_paused';
   providerMessageId?: string;
   error?: string;
   followupId?: string;
+  retryDelayMs?: number;
 }> {
   const claimed = await claimReplySend(replySendId, ['queued']);
   if (!claimed) {
@@ -413,15 +449,24 @@ export async function processReplyRespond(replySendId: string): Promise<{
     return await processClaimedReply(claimed, 'immediate');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isAgentMailAccountSendingPausedError(message)) {
+      await parkReplyForAgentMailPause(claimed.id, message, 'queued');
+      return {
+        status: 'provider_paused',
+        error: message,
+        retryDelayMs: AGENTMAIL_ACCOUNT_PAUSE_RETRY_MS,
+      };
+    }
     await markFailed(claimed.id, message);
     return { status: 'failed', error: message };
   }
 }
 
 export async function processReplyFollowup(replySendId: string): Promise<{
-  status: 'sent' | 'failed' | 'skipped' | 'not_ready';
+  status: 'sent' | 'failed' | 'skipped' | 'not_ready' | 'provider_paused';
   providerMessageId?: string;
   error?: string;
+  retryDelayMs?: number;
 }> {
   const claimed = await claimReplySend(replySendId, ['scheduled']);
   if (!claimed) {
@@ -485,9 +530,69 @@ export async function processReplyFollowup(replySendId: string): Promise<{
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isAgentMailAccountSendingPausedError(message)) {
+      await parkReplyForAgentMailPause(claimed.id, message, 'scheduled');
+      return {
+        status: 'provider_paused',
+        error: message,
+        retryDelayMs: AGENTMAIL_ACCOUNT_PAUSE_RETRY_MS,
+      };
+    }
     await markFailed(claimed.id, message);
     return { status: 'failed', error: message };
   }
 }
 
 export { countImmediateSentReplies };
+
+export async function reconcilePausedReplySends(limit = 50): Promise<number> {
+  const pageLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+  const { rows } = await dbQuery<{
+    id: string;
+    kind: string;
+    campaign_id: string;
+    scheduled_for: string;
+    error_message: string | null;
+  }>(
+    `SELECT rs.id::text, rs.kind, rs.campaign_id::text,
+            rs.scheduled_for::text, rs.error_message
+       FROM outreach.reply_sends rs
+      WHERE rs.status IN ('queued', 'scheduled')
+        AND rs.error_message ~* 'sending paused for this account|AccountSendingPaused'
+        AND (
+          rs.orchestration_job_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+              FROM outreach.orchestration_jobs oj
+             WHERE oj.id = rs.orchestration_job_id
+               AND oj.status IN ('pending', 'in_flight')
+          )
+        )
+      ORDER BY rs.scheduled_for ASC
+      LIMIT $1`,
+    [pageLimit],
+  );
+
+  let revived = 0;
+  for (const row of rows) {
+    if (!isAgentMailAccountSendingPausedError(row.error_message ?? '')) continue;
+    const kind = row.kind === 'followup' ? 'reply.followup' : 'reply.respond';
+    const availableAt = new Date(row.scheduled_for);
+    const jobId = await enqueueWork({
+      kind,
+      payload: { replySendId: row.id },
+      dedupeKey: row.id,
+      scopeKey: row.campaign_id,
+      availableAt: availableAt < new Date() ? new Date() : availableAt,
+      reviveTerminal: true,
+    });
+    await dbQuery(
+      `UPDATE outreach.reply_sends
+          SET orchestration_job_id = $2::uuid, updated_at = now()
+        WHERE id = $1`,
+      [row.id, jobId],
+    );
+    revived += 1;
+  }
+  return revived;
+}

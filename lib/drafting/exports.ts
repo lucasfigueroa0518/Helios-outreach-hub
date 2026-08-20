@@ -7,7 +7,7 @@ import { hasHardLintFailures } from '@/lib/drafting/lint';
 import {
   canonicalJson,
   extractFirstName,
-  normalizeDraftText,
+  normalizeDraftBody,
   normalizeEmail,
   normalizeRequiredField,
 } from '@/lib/drafting/normalize';
@@ -121,8 +121,8 @@ export function neutralizeFormulaCell(value: string): string {
   return value;
 }
 
-export function bodyToCrlf(body: string): string {
-  return normalizeDraftText(body).replace(/\n/g, '\r\n');
+export function bodyToCrlf(body: string, firstName?: string | null): string {
+  return normalizeDraftBody(body, firstName).replace(/\n/g, '\r\n');
 }
 
 export function hasFormulaInjectionRisk(value: string): boolean {
@@ -271,7 +271,7 @@ export function preflightFinalDraftExport(
       }
       seenEmails.set(normalizedEmail, row.itemId);
 
-      const contentKey = `${normalizedEmail}::${row.subject}::${normalizeDraftText(row.bodyText)}`;
+      const contentKey = `${normalizedEmail}::${row.subject}::${normalizeDraftBody(row.bodyText, row.toFirstName)}`;
       const priorContentItem = seenContent.get(contentKey);
       if (priorContentItem) {
         blockers.push({
@@ -338,7 +338,7 @@ export function buildMailCsv(rows: ApprovedDraftExportRow[]): Uint8Array {
     'Job Title': neutralizeFormulaCell(row.title),
     'Location': neutralizeFormulaCell(row.location),
     'Subject': row.subject,
-    'Body': bodyToCrlf(row.bodyText),
+    'Body': bodyToCrlf(row.bodyText, row.toFirstName),
     'From Name': neutralizeFormulaCell(row.fromName),
     'From Email': row.fromEmail,
   }));
@@ -378,7 +378,7 @@ export function buildCoworkRecords(rows: ApprovedDraftExportRow[]): CoworkRecord
     to_name: row.toFullName,
     to_email: row.toEmail,
     subject: row.subject,
-    body_text: normalizeDraftText(row.bodyText),
+    body_text: normalizeDraftBody(row.bodyText, row.toFirstName),
   }));
 }
 

@@ -107,9 +107,11 @@ export function computeCacheAdjustedInputCostUsd(
     cacheWriteTokens?: number;
     cacheTtl?: '5m' | '1h';
     asOf?: Date;
+    inputPerMtokUsd?: number;
   } = {},
 ): number {
   const prices = selectPriceSnapshot(options.asOf);
+  const inputPerMtokUsd = options.inputPerMtokUsd ?? prices.inputPerMtokUsd;
   const cacheHitTokens = options.cacheHitTokens ?? 0;
   const cacheWriteTokens = options.cacheWriteTokens ?? 0;
   const regularInputTokens = Math.max(0, inputTokens - cacheHitTokens - cacheWriteTokens);
@@ -117,9 +119,9 @@ export function computeCacheAdjustedInputCostUsd(
     ? DRAFTING_PRICE_SNAPSHOT.cacheWrite1HourMultiplier
     : DRAFTING_PRICE_SNAPSHOT.cacheWrite5MinMultiplier;
 
-  const regularCost = (regularInputTokens / 1_000_000) * prices.inputPerMtokUsd;
-  const hitCost = (cacheHitTokens / 1_000_000) * prices.inputPerMtokUsd * DRAFTING_PRICE_SNAPSHOT.cacheReadMultiplier;
-  const writeCost = (cacheWriteTokens / 1_000_000) * prices.inputPerMtokUsd * writeMultiplier;
+  const regularCost = (regularInputTokens / 1_000_000) * inputPerMtokUsd;
+  const hitCost = (cacheHitTokens / 1_000_000) * inputPerMtokUsd * DRAFTING_PRICE_SNAPSHOT.cacheReadMultiplier;
+  const writeCost = (cacheWriteTokens / 1_000_000) * inputPerMtokUsd * writeMultiplier;
   return regularCost + hitCost + writeCost;
 }
 

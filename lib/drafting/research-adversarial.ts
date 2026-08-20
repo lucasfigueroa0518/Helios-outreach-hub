@@ -1,10 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 import {
-  computeHaikuTokenCostUsd,
-  computeSearchCostUsd,
-  formatUsd,
-} from '@/lib/drafting/cost';
+  withConversationCache,
+  withToolCache,
+} from '@/lib/anthropic-cache';
+import { priceAnthropicMessages, toProviderUsage } from '@/lib/anthropic-pricing';
 import { sha256Fingerprint } from '@/lib/drafting/normalize';
 import {
   DRAFTING_ADVERSARIAL_PROMPT_VERSION,
@@ -735,6 +735,15 @@ async function adversarialLive(
   let parsed: ReturnType<typeof parseVerdicts> | null = null;
   let parseError: string | null = null;
 
+  const webSearchTool: Anthropic.WebSearchTool20250305 = {
+    type: 'web_search_20250305',
+    name: 'web_search',
+    max_uses: plan.maxSearches,
+  };
+  const tools: Anthropic.MessageCreateParams['tools'] = plan.maxSearches > 0
+    ? [webSearchTool, withToolCache(reportAdversarialVerdictsTool, cacheTtl)]
+    : [withToolCache(reportAdversarialVerdictsTool, cacheTtl)];
+
   const forceVerdicts = async () => {
     messages.push({
       role: 'user',
@@ -746,8 +755,8 @@ async function adversarialLive(
       model: DRAFTING_ADVERSARIAL_MODEL,
       max_tokens: 2_048,
       system,
-      messages,
-      tools: [reportAdversarialVerdictsTool],
+      messages: withConversationCache(messages),
+      tools,
       tool_choice: { type: 'tool', name: 'report_adversarial_verdicts' },
     });
     messagesUsed.push(forced);
@@ -760,19 +769,13 @@ async function adversarialLive(
   if (plan.maxSearches === 0) {
     await forceVerdicts();
   } else {
-    const webSearchTool: Anthropic.WebSearchTool20250305 = {
-      type: 'web_search_20250305',
-      name: 'web_search',
-      max_uses: plan.maxSearches,
-    };
-
     for (let turn = 0; turn < maxTurns; turn += 1) {
       const response = await client.messages.create({
         model: DRAFTING_ADVERSARIAL_MODEL,
         max_tokens: 2_048,
         system,
-        messages,
-        tools: [webSearchTool, reportAdversarialVerdictsTool],
+        messages: withConversationCache(messages),
+        tools,
         tool_choice: { type: 'auto' },
       });
       messagesUsed.push(response);
@@ -831,14 +834,10 @@ async function adversarialLive(
     throw new Error(parseError ?? 'Adversarial verify finished without verdicts');
   }
 
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let searches = 0;
-  for (const message of messagesUsed) {
-    inputTokens += message.usage.input_tokens ?? 0;
-    outputTokens += message.usage.output_tokens ?? 0;
-    searches += webSearchRequests(message);
-  }
+  const priced = priceAnthropicMessages(messagesUsed, {
+    modelId: DRAFTING_ADVERSARIAL_MODEL,
+    fallbackCacheTtl: cacheTtl,
+  });
 
   const nextPacket = applyAdversarialVerdicts(
     packet,
@@ -853,14 +852,7 @@ async function adversarialLive(
     packet: nextPacket,
     skipped: false,
     auditMode: plan.mode,
-    usage: {
-      inputTokens,
-      outputTokens,
-      searches,
-      costUsd: formatUsd(
-        computeHaikuTokenCostUsd(inputTokens, outputTokens) + computeSearchCostUsd(searches),
-      ),
-    },
+    usage: toProviderUsage(priced),
     providerRequestId: messagesUsed[0]?.id ?? 'unknown',
     modelId: DRAFTING_ADVERSARIAL_MODEL,
     promptVersion: DRAFTING_ADVERSARIAL_PROMPT_VERSION,

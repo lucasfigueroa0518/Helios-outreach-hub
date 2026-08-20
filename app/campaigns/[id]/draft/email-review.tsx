@@ -480,6 +480,20 @@ export function EmailReview({
           onRefresh();
           return;
         }
+        if ((data.queued ?? 0) > 0 && (data.sent ?? 0) === 0) {
+          sendHoldRef.current = false;
+          setSendFlash(false);
+          setSendState('idle');
+          onRefresh();
+          return;
+        }
+        if ((data.failed ?? 0) > 0 && (data.sent ?? 0) === 0) {
+          sendHoldRef.current = false;
+          setSendFlash(false);
+          setSendError(typeof data.error === 'string' ? data.error : 'Could not send now');
+          onRefresh();
+          return;
+        }
         advanceAfterSend(fromIndex, itemId);
         setSendState('idle');
         onRefresh();
@@ -513,7 +527,7 @@ export function EmailReview({
         setBulkSendState('idle');
         const parts = [
           data.sent ? `Sent ${data.sent} now` : null,
-          data.queued ? `Queued ${data.queued}` : null,
+          data.queued ? `Queued ${data.queued} — retrying when Agent Mail is back` : null,
           data.failed ? `${data.failed} failed` : null,
         ].filter(Boolean);
         setBulkSendMessage(parts.length > 0 ? parts.join(' · ') : 'Nothing to send');
@@ -754,7 +768,7 @@ export function EmailReview({
     && !sendFlash
     && !rewriting;
   const sendDisabledReason = !sends.configured
-    ? 'Add RESEND_API_KEY to .env.local to enable sending'
+    ? 'Add AGENT_MAIL_API to .env.local to enable sending'
     : alreadySent
       ? 'This draft was already sent'
       : isQueued
@@ -912,7 +926,9 @@ export function EmailReview({
         <div className="drafting-email-line">
           <span className="drafting-email-line__label">From</span>
           <span>
-            {sender ? `${sender.display_name} <${sender.work_email}>` : 'Sender profile loading…'}
+            {sender
+              ? `${sender.display_name} · inbox assigned at send`
+              : 'Sender profile loading…'}
           </span>
         </div>
         <div className="drafting-email-line">
@@ -1051,7 +1067,7 @@ export function EmailReview({
               disabled={!sends.available || bulkSendState === 'sending' || sends.pending < 1}
               title={
                 !sends.configured
-                  ? 'Add RESEND_API_KEY to enable sending'
+                  ? 'Add AGENT_MAIL_API to enable sending'
                   : sends.pending < 1
                     ? 'No ready drafts to send (retry-suggested drafts are skipped)'
                     : `Send ${sends.pending} ready email${sends.pending === 1 ? '' : 's'} via Resend`

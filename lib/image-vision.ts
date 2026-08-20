@@ -1,5 +1,7 @@
 import { prepareImageForVision } from '@/lib/image-preprocess';
 import type { ExtractionResult } from '@/lib/extraction';
+import { AnthropicUsageCollector } from '@/lib/anthropic-pricing';
+import { EXTRACTION_MODEL } from '@/lib/models';
 import { createLiveVisionCaller, extractPeopleFromTiles, type VisionCaller } from '@/lib/vision-extraction';
 
 /**
@@ -17,10 +19,13 @@ export async function extractPeopleFromImageBytes(
   if (!prepared.ok) {
     return { people: [], counted: null, warnings: [prepared.message] };
   }
-  const resolvedCaller = caller ?? createLiveVisionCaller();
+  const collector = caller ? undefined : new AnthropicUsageCollector();
+  const resolvedCaller = caller ?? createLiveVisionCaller(collector);
   const result = await extractPeopleFromTiles(prepared.tiles, uploadId, resolvedCaller);
   if (prepared.warnings.length) {
     result.warnings.unshift(...prepared.warnings);
   }
+  const billed = collector?.price({ modelId: EXTRACTION_MODEL });
+  if (billed) result.billedUsage = billed;
   return result;
 }

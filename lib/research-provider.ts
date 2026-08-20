@@ -1,5 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { MAPPING_MODEL, RESEARCH_MODEL } from '@/lib/models';
+import {
+  cachedSystemText,
+  withConversationCache,
+  withToolCache,
+} from '@/lib/anthropic-cache';
+import { priceAnthropicMessages } from '@/lib/anthropic-pricing';
+import { MAPPING_MODEL, RESEARCH_MODEL, resolvedDraftingPromptCacheTtl } from '@/lib/models';
 import type { EmailPattern } from '@/lib/email-patterns';
 import type {
   ProfileEvidenceSource,
@@ -261,6 +267,29 @@ const reportTool: Anthropic.Tool = {
     },
   },
 };
+
+function promptCacheTtl() {
+  return resolvedDraftingPromptCacheTtl();
+}
+
+function researchSystem(text: string): Anthropic.TextBlockParam[] {
+  return cachedSystemText(text, promptCacheTtl());
+}
+
+function reportToolCached() {
+  return withToolCache(reportTool, promptCacheTtl());
+}
+
+function searchAndReportTools(maxUses: number): Anthropic.MessageCreateParams['tools'] {
+  return [
+    {
+      type: 'web_search_20250305',
+      name: 'web_search',
+      max_uses: maxUses,
+    },
+    reportToolCached(),
+  ];
+}
 
 export function buildResearchQueryPlan(disambiguation: ResearchDisambiguation) {
   const domain = disambiguation.candidate_domain ?? disambiguation.company_name;
@@ -696,6 +725,22 @@ function webSearchRequests(message: Anthropic.Message) {
   return Math.max(0, Number(usage.server_tool_use?.web_search_requests ?? 0));
 }
 
+function withBilledUsage(
+  report: ResearchReport,
+  messages: Anthropic.Message[],
+  modelId: string,
+  searches: number,
+): ResearchReport {
+  return {
+    ...report,
+    research_searches_used: searches,
+    research_billed_usage: priceAnthropicMessages(messages, {
+      modelId,
+      fallbackCacheTtl: resolvedDraftingPromptCacheTtl(),
+    }),
+  };
+}
+
 export async function researchCompanyLive(
   disambiguation: ResearchDisambiguation,
   options: { maxSearchUses?: number } = {},
@@ -703,40 +748,39 @@ export async function researchCompanyLive(
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured');
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const prompt = userPrompt(disambiguation);
+  const system = researchSystem(SYSTEM_PROMPT);
+  const tools = searchAndReportTools(
+    options.maxSearchUses ?? searchUses('ORG_PRIMARY_SEARCH_USES', 5, 10),
+  );
+  const firstMessages: Anthropic.MessageParam[] = [{ role: 'user', content: prompt }];
   const first = await client.messages.create({
     model: RESEARCH_MODEL,
     max_tokens: 2500,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: prompt }],
-    tools: [
-      {
-        type: 'web_search_20250305',
-        name: 'web_search',
-        max_uses: options.maxSearchUses
-          ?? searchUses('ORG_PRIMARY_SEARCH_USES', 5, 10),
-      },
-      reportTool,
-    ],
+    system,
+    messages: withConversationCache(firstMessages),
+    tools,
     tool_choice: { type: 'auto' },
   });
   const firstReport = reportFromMessage(first);
-  if (firstReport) return { ...firstReport, research_searches_used: webSearchRequests(first) };
+  if (firstReport) {
+    return withBilledUsage(firstReport, [first], RESEARCH_MODEL, webSearchRequests(first));
+  }
 
   const second = await client.messages.create({
     model: RESEARCH_MODEL,
     max_tokens: 1200,
-    system: SYSTEM_PROMPT,
-    messages: [
+    system,
+    messages: withConversationCache([
       { role: 'user', content: prompt },
       { role: 'assistant', content: first.content as Anthropic.ContentBlockParam[] },
       { role: 'user', content: 'You have finished searching. Now call report_company with your findings.' },
-    ],
-    tools: [reportTool],
-    tool_choice: { type: 'auto' },
+    ]),
+    tools,
+    tool_choice: { type: 'tool', name: 'report_company' },
   });
   const report = reportFromMessage(second);
   if (!report) throw new Error('Research finished without report_company output');
-  return { ...report, research_searches_used: webSearchRequests(first) };
+  return withBilledUsage(report, [first, second], RESEARCH_MODEL, webSearchRequests(first));
 }
 
 export async function researchProfileRescueLive(
@@ -749,40 +793,38 @@ export async function researchProfileRescueLive(
   }
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const prompt = profileRescuePrompt(disambiguation);
+  const system = researchSystem(PROFILE_RESCUE_SYSTEM_PROMPT);
+  const tools = searchAndReportTools(
+    options.maxSearchUses ?? searchUses('ORG_PROFILE_RESCUE_SEARCH_USES', 1, 1),
+  );
   const first = await client.messages.create({
     model: MAPPING_MODEL,
     max_tokens: 1400,
-    system: PROFILE_RESCUE_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: prompt }],
-    tools: [
-      {
-        type: 'web_search_20250305',
-        name: 'web_search',
-        max_uses: options.maxSearchUses
-          ?? searchUses('ORG_PROFILE_RESCUE_SEARCH_USES', 1, 1),
-      },
-      reportTool,
-    ],
+    system,
+    messages: withConversationCache([{ role: 'user', content: prompt }]),
+    tools,
     tool_choice: { type: 'auto' },
   });
   const firstReport = reportFromMessage(first);
-  if (firstReport) return { ...firstReport, research_searches_used: webSearchRequests(first) };
+  if (firstReport) {
+    return withBilledUsage(firstReport, [first], MAPPING_MODEL, webSearchRequests(first));
+  }
 
   const second = await client.messages.create({
     model: MAPPING_MODEL,
     max_tokens: 900,
-    system: PROFILE_RESCUE_SYSTEM_PROMPT,
-    messages: [
+    system,
+    messages: withConversationCache([
       { role: 'user', content: prompt },
       { role: 'assistant', content: first.content as Anthropic.ContentBlockParam[] },
       { role: 'user', content: 'Searching is finished. Call report_company now with only supported findings.' },
-    ],
-    tools: [reportTool],
+    ]),
+    tools,
     tool_choice: { type: 'tool', name: 'report_company' },
   });
   const report = reportFromMessage(second);
   if (!report) throw new Error('Profile rescue finished without report_company output');
-  return { ...report, research_searches_used: webSearchRequests(first) };
+  return withBilledUsage(report, [first, second], MAPPING_MODEL, webSearchRequests(first));
 }
 
 export async function researchEmailRescueLive(
@@ -795,40 +837,38 @@ export async function researchEmailRescueLive(
   }
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const prompt = emailRescuePrompt(disambiguation);
+  const system = researchSystem(EMAIL_RESCUE_SYSTEM_PROMPT);
+  const tools = searchAndReportTools(
+    options.maxSearchUses ?? searchUses('ORG_EMAIL_RESCUE_SEARCH_USES', 4, 6),
+  );
   const first = await client.messages.create({
     model: MAPPING_MODEL,
     max_tokens: 1400,
-    system: EMAIL_RESCUE_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: prompt }],
-    tools: [
-      {
-        type: 'web_search_20250305',
-        name: 'web_search',
-        max_uses: options.maxSearchUses
-          ?? searchUses('ORG_EMAIL_RESCUE_SEARCH_USES', 4, 6),
-      },
-      reportTool,
-    ],
+    system,
+    messages: withConversationCache([{ role: 'user', content: prompt }]),
+    tools,
     tool_choice: { type: 'auto' },
   });
   const firstReport = reportFromMessage(first);
-  if (firstReport) return { ...firstReport, research_searches_used: webSearchRequests(first) };
+  if (firstReport) {
+    return withBilledUsage(firstReport, [first], MAPPING_MODEL, webSearchRequests(first));
+  }
 
   const second = await client.messages.create({
     model: MAPPING_MODEL,
     max_tokens: 900,
-    system: EMAIL_RESCUE_SYSTEM_PROMPT,
-    messages: [
+    system,
+    messages: withConversationCache([
       { role: 'user', content: prompt },
       { role: 'assistant', content: first.content as Anthropic.ContentBlockParam[] },
       { role: 'user', content: 'Searching is finished. Call report_company now with only supported findings.' },
-    ],
-    tools: [reportTool],
+    ]),
+    tools,
     tool_choice: { type: 'tool', name: 'report_company' },
   });
   const report = reportFromMessage(second);
   if (!report) throw new Error('Email rescue finished without report_company output');
-  return { ...report, research_searches_used: webSearchRequests(first) };
+  return withBilledUsage(report, [first, second], MAPPING_MODEL, webSearchRequests(first));
 }
 
 export async function researchCompanyWithSearxng(
@@ -874,17 +914,17 @@ export async function researchCompanyWithSearxng(
   const message = await client.messages.create({
     model: RESEARCH_MODEL,
     max_tokens: 1800,
-    system: SYSTEM_PROMPT,
+    system: researchSystem(SYSTEM_PROMPT),
     messages: [{
       role: 'user',
       content: `${userPrompt(disambiguation)}\n\nSEARCH RESULTS:\n${results.map((item) =>
         `URL: ${item.url}\nTITLE: ${item.title}\nSNIPPET: ${item.content}`,
       ).join('\n\n')}`,
     }],
-    tools: [reportTool],
+    tools: [reportToolCached()],
     tool_choice: { type: 'auto' },
   });
   const report = reportFromMessage(message);
   if (!report) throw new Error('SearXNG fallback finished without report_company output');
-  return { ...report, research_searches_used: queries.length };
+  return withBilledUsage(report, [message], RESEARCH_MODEL, queries.length);
 }

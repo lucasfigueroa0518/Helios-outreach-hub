@@ -1,0 +1,21 @@
+[Unit]
+Description=Helios Outreach Hub orchestration worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/helios-worker/app
+EnvironmentFile=/opt/helios-worker/worker.env
+ExecStart=/usr/bin/npm run worker
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=120
+# Sized for e2-standard-2 (8 GB) at laptop-equivalent drafting parallelism.
+MemoryMax=7G
+MemoryHigh=6G
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -21,6 +21,7 @@ export const WORK_KINDS = [
   'reply.respond',
   'reply.followup',
   'dashboards.daily_update',
+  'anthropic.cost_sync',
   'system.reconcile',
 ] as const;
 
@@ -90,6 +91,7 @@ export type WorkPayloadMap = {
   'reply.respond': { replySendId: string };
   'reply.followup': { replySendId: string };
   'dashboards.daily_update': { reason?: string };
+  'anthropic.cost_sync': { reason?: string };
   'system.reconcile': { reason?: string };
 };
 

@@ -13,7 +13,11 @@ test('drafting assets load with matching manifest hashes', async () => {
   const assets = await loadDraftingAssets({ forceReload: true });
 
   assert.ok(assets.skill.content.includes('First-contact outreach'));
-  assert.ok(assets.skill.content.includes('follow the Subject line system block'));
+  assert.ok(assets.skill.content.includes('## Output contract'));
+  assert.ok(assets.skill.content.includes('Greeting line'));
+  assert.ok(assets.skill.content.includes('Exactly one service per email'));
+  assert.equal(assets.skill.version, 'v8');
+  assert.equal(assets.versions.skillVersion, 'v8');
   assert.ok(!assets.skill.content.includes('\r'), 'skill content must be LF-normalized');
   assert.ok(assets.subjectLine.content.includes('Helios topic lean'));
   assert.ok(assets.subjectLine.content.includes('Governing principle'));

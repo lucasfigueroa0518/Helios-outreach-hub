@@ -2,6 +2,12 @@
  * HTML email signature: headshot left, Full Name / Position / Company on the right.
  */
 
+import {
+  inferIdentitySlug,
+  SENDER_IDENTITY_DEFAULTS,
+  type SenderIdentitySlug,
+} from '@/lib/agentmail-inboxes';
+
 export type EmailSignatureFields = {
   displayName: string;
   title: string;
@@ -12,16 +18,11 @@ export type EmailSignatureFields = {
 
 const LUCAS_EMAIL = 'lucas@heliosgroup.ai';
 
-/** Hardcoded signature defaults for lucas@heliosgroup.ai. */
-export const LUCAS_SIGNATURE_DEFAULTS = {
-  displayName: 'Lucas Figueroa',
-  title: 'President',
-  companyName: 'Helios Group',
-  /** Served from Next.js public/ — keep under ~50KB for email clients. */
-  headshotPublicPath: '/signatures/lucas-figueroa.jpg',
-} as const;
+/** Hardcoded signature defaults for Lucas (any of his outreach inboxes). */
+export const LUCAS_SIGNATURE_DEFAULTS = SENDER_IDENTITY_DEFAULTS.lucas;
+export const TOMMY_SIGNATURE_DEFAULTS = SENDER_IDENTITY_DEFAULTS.tommy;
 
-/** Content-ID used when the headshot is inlined via Resend attachments. */
+/** Content-ID used when the headshot is inlined via Agent Mail attachments. */
 export const SIGNATURE_HEADSHOT_CID = 'helios-signature-headshot';
 
 function isLocalOrigin(url: string): boolean {
@@ -51,7 +52,25 @@ export function absolutePublicUrl(pathname: string): string {
 }
 
 export function isLucasSenderEmail(email: string | null | undefined): boolean {
-  return (email ?? '').trim().toLowerCase() === LUCAS_EMAIL;
+  const normalized = (email ?? '').trim().toLowerCase();
+  return normalized === LUCAS_EMAIL
+    || normalized.startsWith('lucas@heliosgroup.')
+    || normalized.includes('figueroa@heliosgroup.');
+}
+
+export function isTommySenderEmail(email: string | null | undefined): boolean {
+  const normalized = (email ?? '').trim().toLowerCase();
+  return normalized.includes('tommy@heliosgroup.')
+    || normalized.includes('thomas@heliosgroup.')
+    || normalized.includes('pozo@heliosgroup.');
+}
+
+export function identitySlugFromSender(input: {
+  identitySlug?: string | null;
+  workEmail?: string | null;
+  displayName?: string | null;
+}): SenderIdentitySlug {
+  return inferIdentitySlug(input);
 }
 
 /**
@@ -60,13 +79,14 @@ export function isLucasSenderEmail(email: string | null | undefined): boolean {
  */
 export function resolveEmailSignature(input: {
   workEmail: string;
+  identitySlug?: string | null;
   displayName?: string | null;
   title?: string | null;
   companyName?: string | null;
   /** Profile id (UI / lookup only). */
   profileId?: string | null;
   headshotStoragePath?: string | null;
-  /** Required for email HTML: cid:… from an inline Resend attachment. */
+  /** Required for email HTML: cid:… from an inline attachment. */
   headshotUrlOverride?: string | null;
   /**
    * When true, may emit hosted https URLs (UI preview only).
@@ -77,17 +97,25 @@ export function resolveEmailSignature(input: {
   const workEmail = input.workEmail.trim().toLowerCase();
   const override = input.headshotUrlOverride?.trim() || null;
   const allowRemote = Boolean(input.allowRemoteHeadshot);
+  const slug = inferIdentitySlug({
+    identitySlug: input.identitySlug,
+    workEmail,
+    displayName: input.displayName,
+  });
+  const knownIdentity = Boolean(input.identitySlug)
+    || isLucasSenderEmail(workEmail)
+    || isTommySenderEmail(workEmail);
+  const defaults = SENDER_IDENTITY_DEFAULTS[slug];
 
-  if (isLucasSenderEmail(workEmail)) {
-    // Hardcoded visual identity for Lucas; profile title may override position only.
+  if (knownIdentity) {
     let headshotUrl = override;
     if (!headshotUrl && allowRemote) {
-      headshotUrl = absolutePublicUrl(LUCAS_SIGNATURE_DEFAULTS.headshotPublicPath);
+      headshotUrl = absolutePublicUrl(defaults.headshotPublicPath);
     }
     return {
-      displayName: LUCAS_SIGNATURE_DEFAULTS.displayName,
-      title: (input.title?.trim() || LUCAS_SIGNATURE_DEFAULTS.title),
-      companyName: LUCAS_SIGNATURE_DEFAULTS.companyName,
+      displayName: defaults.displayName,
+      title: (input.title?.trim() || defaults.title),
+      companyName: defaults.companyName,
       headshotUrl,
     };
   }
@@ -192,7 +220,7 @@ export function isSenderProfileSignatureReady(profile: {
   headshot_storage_path?: string | null;
 }): boolean {
   if (!profile.display_name?.trim() || !profile.title?.trim()) return false;
-  if (isLucasSenderEmail(profile.work_email)) return true;
+  if (isLucasSenderEmail(profile.work_email) || isTommySenderEmail(profile.work_email)) return true;
   return Boolean(profile.headshot_storage_path?.trim());
 }
 

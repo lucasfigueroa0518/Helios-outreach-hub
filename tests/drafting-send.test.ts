@@ -7,8 +7,6 @@ import { deriveEmailEngagementLifecycle } from '@/lib/drafting/repository';
 import {
   isEmailSendConfigured,
   outboundReplyToAddress,
-  parseReplyPlusItemId,
-  replyToAddressForItem,
 } from '@/lib/drafting/send';
 
 function sendReadyRow(overrides: Partial<ApprovedDraftExportRow> = {}): ApprovedDraftExportRow {
@@ -25,7 +23,7 @@ function sendReadyRow(overrides: Partial<ApprovedDraftExportRow> = {}): Approved
     subject: 'Quick note',
     bodyText: 'Hello there.',
     fromName: 'Sender',
-    fromEmail: 'sender@heliosgroup.ai',
+    fromEmail: 'lucas@heliosgroup.email',
     senderTitle: 'Associate',
     senderCompanyName: 'Helios Group',
     senderProfileId: null,
@@ -52,18 +50,18 @@ function sendReadyRow(overrides: Partial<ApprovedDraftExportRow> = {}): Approved
   };
 }
 
-test('isEmailSendConfigured reflects RESEND_API_KEY presence', () => {
-  const original = process.env.RESEND_API_KEY;
+test('isEmailSendConfigured reflects AGENT_MAIL_API presence', () => {
+  const original = process.env.AGENT_MAIL_API;
   try {
-    delete process.env.RESEND_API_KEY;
+    delete process.env.AGENT_MAIL_API;
     assert.equal(isEmailSendConfigured(), false);
-    process.env.RESEND_API_KEY = 're_test_key';
+    process.env.AGENT_MAIL_API = 'am_test_key';
     assert.equal(isEmailSendConfigured(), true);
-    process.env.RESEND_API_KEY = '   ';
+    process.env.AGENT_MAIL_API = '   ';
     assert.equal(isEmailSendConfigured(), false);
   } finally {
-    if (original === undefined) delete process.env.RESEND_API_KEY;
-    else process.env.RESEND_API_KEY = original;
+    if (original === undefined) delete process.env.AGENT_MAIL_API;
+    else process.env.AGENT_MAIL_API = original;
   }
 });
 
@@ -87,30 +85,14 @@ test('preflightFinalDraftSend still requires fresh fingerprints; export does not
   assert.equal(preflightFinalDraftSend([row]).ok, false);
 });
 
-test('outbound Reply-To helper still returns sender work email as fallback', () => {
-  assert.equal(outboundReplyToAddress('tommy@heliosgroup.ai'), 'tommy@heliosgroup.ai');
-  assert.equal(outboundReplyToAddress('  lucas@heliosgroup.ai  '), 'lucas@heliosgroup.ai');
+test('outbound Reply-To helper returns the sending inbox', () => {
+  assert.equal(outboundReplyToAddress('tommy@heliosgroup.email'), 'tommy@heliosgroup.email');
+  assert.equal(outboundReplyToAddress('  lucas@heliosgroup.email  '), 'lucas@heliosgroup.email');
   assert.equal(outboundReplyToAddress(''), undefined);
   assert.equal(outboundReplyToAddress('   '), undefined);
 });
 
-test('reply plus-address is used for inbound routing and parses item id', () => {
-  const original = process.env.RESEND_REPLY_DOMAIN;
-  try {
-    process.env.RESEND_REPLY_DOMAIN = 'replies.heliosgroup.ai';
-    const itemId = '4755aa7b-cee3-4794-bf73-143cb3fabd06';
-    const address = replyToAddressForItem(itemId);
-    assert.equal(address, `reply+${itemId}@replies.heliosgroup.ai`);
-    assert.equal(parseReplyPlusItemId([address]), itemId);
-    assert.equal(parseReplyPlusItemId([`Name <${address}>`]), itemId);
-    assert.equal(parseReplyPlusItemId(['other@example.com']), null);
-  } finally {
-    if (original === undefined) delete process.env.RESEND_REPLY_DOMAIN;
-    else process.env.RESEND_REPLY_DOMAIN = original;
-  }
-});
-
-test('deriveEmailEngagementLifecycle prefers reply over open over delivered', () => {
+test('deriveEmailEngagementLifecycle prefers reply over delivered', () => {
   assert.equal(deriveEmailEngagementLifecycle(null), 'unsent');
   assert.equal(
     deriveEmailEngagementLifecycle({

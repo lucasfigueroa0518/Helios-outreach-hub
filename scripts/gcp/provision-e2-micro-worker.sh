@@ -45,11 +45,11 @@ gcloud services enable compute.googleapis.com --project="${PROJECT}"
 if gcloud compute instances describe "${INSTANCE}" --zone="${ZONE}" --project="${PROJECT}" >/dev/null 2>&1; then
   echo "Instance ${INSTANCE} already exists — skipping create."
 else
-  echo "Creating e2-micro (Always Free region required)…"
+  echo "Creating e2-standard-2 worker VM…"
   gcloud compute instances create "${INSTANCE}" \
     --project="${PROJECT}" \
     --zone="${ZONE}" \
-    --machine-type=e2-micro \
+    --machine-type="${GCP_MACHINE_TYPE:-e2-standard-2}" \
     --image-family=ubuntu-2204-lts \
     --image-project=ubuntu-os-cloud \
     --boot-disk-size=30GB \
@@ -72,7 +72,8 @@ gcloud compute ssh "${INSTANCE}" --zone="${ZONE}" --project="${PROJECT}" \
   --command='sudo mkdir -p /opt/helios-worker && sudo chmod 755 /opt/helios-worker'
 
 gcloud compute scp --zone="${ZONE}" --project="${PROJECT}" \
-  scripts/gcp/remote-bootstrap.sh "${INSTANCE}:/tmp/remote-bootstrap.sh"
+  scripts/gcp/remote-bootstrap.sh scripts/gcp/helios-worker.service \
+  "${INSTANCE}:/tmp/"
 
 gcloud compute ssh "${INSTANCE}" --zone="${ZONE}" --project="${PROJECT}" \
   --command='sudo bash /tmp/remote-bootstrap.sh'

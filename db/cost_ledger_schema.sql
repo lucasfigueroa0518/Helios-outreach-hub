@@ -109,3 +109,37 @@ UPDATE outreach.lead_cost_events event
    AND event.source_id = totals.drafting_item_id::text;
 
 GRANT ALL ON TABLE outreach.lead_cost_events TO postgres, service_role;
+
+-- Daily billed totals from Anthropic Cost API (console reconciliation).
+CREATE TABLE IF NOT EXISTS outreach.anthropic_cost_report_days (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    day_utc         date NOT NULL,
+    cost_type       text,
+    token_type      text,
+    model           text,
+    description     text,
+    amount_usd      numeric(20, 8) NOT NULL DEFAULT 0,
+    currency_code   text NOT NULL DEFAULT 'USD',
+    raw             jsonb NOT NULL DEFAULT '{}'::jsonb,
+    synced_at       timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE outreach.anthropic_cost_report_days
+    ADD COLUMN IF NOT EXISTS description text;
+
+ALTER TABLE outreach.anthropic_cost_report_days
+    DROP CONSTRAINT IF EXISTS anthropic_cost_report_days_day_utc_cost_type_token_type_model_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS anthropic_cost_report_days_uidx
+    ON outreach.anthropic_cost_report_days (
+      day_utc,
+      coalesce(cost_type, ''),
+      coalesce(token_type, ''),
+      coalesce(model, ''),
+      coalesce(description, '')
+    );
+
+CREATE INDEX IF NOT EXISTS anthropic_cost_report_days_day_idx
+    ON outreach.anthropic_cost_report_days (day_utc);
+
+GRANT ALL ON TABLE outreach.anthropic_cost_report_days TO postgres, service_role;

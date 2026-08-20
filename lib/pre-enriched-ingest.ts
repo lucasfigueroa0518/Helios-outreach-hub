@@ -194,6 +194,8 @@ async function extractStagingUpload(upload: StagingUpload): Promise<ExtractionRe
         people_count_provisional: false,
         warnings: result.warnings,
         cache_hit: false,
+        actual_cost_usd: result.billedUsage?.costUsd ?? '0.0000',
+        usage: result.billedUsage ?? {},
         // Keep result for assemble/re-read of this file only (not returned by slim list).
         result,
         progress: {

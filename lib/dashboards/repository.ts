@@ -403,6 +403,9 @@ export async function createContextUpdate(input: {
   windowStart: Date;
   windowEnd: Date;
   generatedBy: GenSource;
+  billedUsage?: {
+    costUsd: string;
+  } & Record<string, unknown> | null;
 }): Promise<{
   id: string;
   projectId: string;
@@ -421,8 +424,8 @@ export async function createContextUpdate(input: {
     generated_by: GenSource;
   }>(
     `INSERT INTO dashboards.context_updates
-       (id, project_id, bullets, window_start, window_end, generated_by)
-     VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+       (id, project_id, bullets, window_start, window_end, generated_by, actual_cost_usd, usage)
+     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7::numeric, $8::jsonb)
      RETURNING id, project_id, window_start, window_end, generated_at, generated_by`,
     [
       id,
@@ -431,6 +434,8 @@ export async function createContextUpdate(input: {
       input.windowStart,
       input.windowEnd,
       input.generatedBy,
+      input.billedUsage?.costUsd ?? '0.0000',
+      JSON.stringify(input.billedUsage ?? {}),
     ],
   );
   const row = rows[0]!;

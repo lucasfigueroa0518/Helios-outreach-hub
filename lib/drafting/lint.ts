@@ -1,3 +1,4 @@
+import { hasLowercaseGreetingBodyOpen, hasSameLineGreeting } from '@/lib/drafting/normalize';
 import type { LintFinding, LintResult } from '@/lib/drafting/types';
 
 type LintRule = {
@@ -76,8 +77,20 @@ const WARNING_RULES: LintRule[] = [
   { code: 'RULE_OF_THREE', message: 'Rule-of-three cadence', severity: 'warning', pattern: /\b(one|first)[^.!?]{0,40}\b(two|second)[^.!?]{0,40}\b(three|third)\b/i },
   { code: 'INTENSIFIER', message: 'Excessive intensifier', severity: 'warning', pattern: /\b(very|really|extremely|incredibly)\b/gi },
   { code: 'OVERLONG_SUBJECT', message: 'Overlong subject', severity: 'warning', pattern: /.{61,}/ },
-  { code: 'OVERLONG_BODY', message: 'Overlong body', severity: 'warning', pattern: /[\s\S]{1801,}/ },
 ];
+
+const MAX_BODY_WORDS = 120;
+const MAX_SENTENCES_PER_PARAGRAPH = 3;
+
+function countWords(text: string): number {
+  return text.trim() ? text.trim().split(/\s+/).length : 0;
+}
+
+function countSentences(text: string): number {
+  return [...text.matchAll(/[^.!?]+[.!?]+|[^.!?]+$/g)]
+    .map((match) => match[0].trim())
+    .filter(Boolean).length;
+}
 
 function collectMatches(
   text: string,
@@ -208,6 +221,52 @@ export function lintDraft(subject: string, bodyText: string): LintResult {
 
   hard.push(...subjectBenefitHeuristic(subject));
   hard.push(...findOverloadedSentences(bodyText));
+  if (hasSameLineGreeting(bodyText)) {
+    const firstLine = bodyText.split(/\n/, 1)[0] ?? bodyText;
+    hard.push({
+      code: 'GREETING_LINE_BREAK',
+      message: 'Opening "[First name]," must be on its own line, then a blank line',
+      field: 'body',
+      span: { start: 0, end: Math.min(firstLine.length, 80), text: firstLine.slice(0, 80) },
+    });
+  } else if (hasLowercaseGreetingBodyOpen(bodyText)) {
+    const open = bodyText.match(/\n\n(\S)/);
+    const idx = open ? bodyText.indexOf(open[1], bodyText.indexOf('\n\n')) : 0;
+    hard.push({
+      code: 'GREETING_BODY_CAPITALIZATION',
+      message: 'First word after the greeting blank line must be capitalized',
+      field: 'body',
+      span: { start: Math.max(0, idx), end: Math.min(bodyText.length, idx + 24), text: bodyText.slice(idx, idx + 24) },
+    });
+  }
+
+  const wordCount = countWords(bodyText);
+  if (wordCount > MAX_BODY_WORDS) {
+    warnings.push({
+      code: 'OVERLONG_BODY',
+      message: `Body exceeds ${MAX_BODY_WORDS} words (${wordCount})`,
+      field: 'body',
+      span: { start: 0, end: bodyText.length, text: bodyText.slice(0, 180) },
+    });
+  }
+
+  let paragraphOffset = 0;
+  for (const paragraph of bodyText.split(/\n\s*\n/)) {
+    const sentenceCount = countSentences(paragraph);
+    if (sentenceCount > MAX_SENTENCES_PER_PARAGRAPH) {
+      warnings.push({
+        code: 'OVERLONG_PARAGRAPH',
+        message: `Paragraph has more than ${MAX_SENTENCES_PER_PARAGRAPH} sentences`,
+        field: 'body',
+        span: {
+          start: paragraphOffset,
+          end: paragraphOffset + paragraph.length,
+          text: paragraph.slice(0, 180),
+        },
+      });
+    }
+    paragraphOffset += paragraph.length + 2;
+  }
 
   if (countMeetingAsks(bodyText) > 1) {
     hard.push({
@@ -252,6 +311,8 @@ export const MECHANICAL_AUTO_REPAIR_LINT_CODES = new Set([
   'VARIANT_LABEL',
   'SUBJECT_NEWLINE',
   'UNSUBSCRIBE',
+  'GREETING_LINE_BREAK',
+  'GREETING_BODY_CAPITALIZATION',
 ]);
 
 export function isRetrySuggestedLintCode(code: string): boolean {
@@ -265,6 +326,18 @@ export function isMechanicalAutoRepairLintCode(code: string): boolean {
 /** True when any hard finding would block Approve / force failed_write. */
 export function hasBlockingHardLintFailures(result: LintResult): boolean {
   return result.hard.some((finding) => !RETRY_SUGGESTED_LINT_CODES.has(finding.code));
+}
+
+/**
+ * Judgment / temporal hard fails — not mechanical formatting. First write skips
+ * auto-repair for these and surfaces the draft in review. After one mechanical
+ * repair, leftover judgment must do the same; otherwise an em dash turns a
+ * reviewable draft into failed_write.
+ */
+export function hasJudgmentHardLintFailures(result: LintResult): boolean {
+  return result.hard.some((finding) =>
+    !RETRY_SUGGESTED_LINT_CODES.has(finding.code)
+    && !MECHANICAL_AUTO_REPAIR_LINT_CODES.has(finding.code));
 }
 
 /** True when mechanical lint warrants one automatic repair write. */
@@ -319,6 +392,7 @@ export function hardLintGuidanceForWriter(): string {
     'Never verbalize ignorance ("I don\'t know", "I won\'t guess") — omit unknowns instead',
     'Never claim Embark has no track record / no industry expertise',
     'Split overloaded sentences into separate short sentences; one idea per sentence; no stacked appositions or clause chains',
+    'Open with "[First name]," on its own line, then a blank line, then the first sentence — never "Blane, your work…"; the first word after the blank line must be capitalized',
   ];
   return [
     'Hard skill lint (automatic reject if violated):',

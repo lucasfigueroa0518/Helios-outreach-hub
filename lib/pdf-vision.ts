@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { PDFDocument } from 'pdf-lib';
 import type { ExtractedPerson, ExtractionResult } from '@/lib/extraction';
+import { cachedSystemText, withToolCache } from '@/lib/anthropic-cache';
+import { AnthropicUsageCollector } from '@/lib/anthropic-pricing';
 import { assertLiveExtractionAllowed, EXTRACTION_MODEL } from '@/lib/models';
 
 const MAX_PAGES_PER_CALL = 90;
@@ -112,7 +114,7 @@ async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createLivePdfCaller(): PdfCaller {
+export function createLivePdfCaller(collector?: AnthropicUsageCollector): PdfCaller {
   assertLiveExtractionAllowed();
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured');
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 });
@@ -122,16 +124,17 @@ export function createLivePdfCaller(): PdfCaller {
       const message = await callWithRetry(() => client.messages.create({
         model: EXTRACTION_MODEL,
         max_tokens: Math.min(8000, pageCount * 200 + 500),
+        system: cachedSystemText(extractDocumentPrompt()),
         messages: [{
           role: 'user',
           content: [
             { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBytes.toString('base64') } },
-            { type: 'text', text: extractDocumentPrompt() },
           ],
         }],
-        tools: [extractDocumentTool],
+        tools: [withToolCache(extractDocumentTool)],
         tool_choice: { type: 'tool', name: 'extract_people' },
       }));
+      collector?.record(message);
       const block = message.content.find(
         (item): item is Anthropic.ToolUseBlock => item.type === 'tool_use' && item.name === 'extract_people',
       );
@@ -185,6 +188,10 @@ export async function extractPeopleFromPdfBytes(
   caller?: PdfCaller,
 ): Promise<ExtractionResult> {
   const chunks = await splitPdfIntoChunks(bytes);
-  const resolvedCaller = caller ?? createLivePdfCaller();
-  return extractPeopleFromPdfChunks(chunks, uploadId, resolvedCaller);
+  const collector = caller ? undefined : new AnthropicUsageCollector();
+  const resolvedCaller = caller ?? createLivePdfCaller(collector);
+  const result = await extractPeopleFromPdfChunks(chunks, uploadId, resolvedCaller);
+  const billed = collector?.price({ modelId: EXTRACTION_MODEL });
+  if (billed) result.billedUsage = billed;
+  return result;
 }

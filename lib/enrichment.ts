@@ -2052,6 +2052,7 @@ async function finishResearchJobAndLedger(
   status: 'done' | 'failed',
   domain: string | null,
   errorMessage: string | null,
+  billedUsage?: import('@/lib/anthropic-pricing').AnthropicUsageContract | null,
 ): Promise<string[]> {
   const finished = await dbQuery<{ finish_research_job: string[] }>(
     `SELECT public.finish_research_job($1, $2, $3, $4)`,
@@ -2068,6 +2069,7 @@ async function finishResearchJobAndLedger(
       companyKey: job.company_key,
       runIds: job.requested_by_runs,
       searchesUsed: Number(rows[0]?.searches_used ?? job.searches_used ?? 0),
+      billedUsage,
     });
   } catch (error) {
     console.error('lead cost ledger (enrichment) failed:', error);
@@ -2173,6 +2175,7 @@ export async function executeResearchJob(
   }
 
   let reservedSearches = 0;
+  let billedUsage: import('@/lib/anthropic-pricing').AnthropicUsageContract | null = null;
   const researchStartedAt = Date.now();
   for (const runId of activeRuns) {
     await incrementEnrichmentInsight(runId, 'research_jobs_started');
@@ -2250,6 +2253,7 @@ export async function executeResearchJob(
         research_budget_exhausted: actualSearches >= remainingBudget,
       };
     }
+    billedUsage = report.research_billed_usage ?? null;
     const stillActive: string[] = [];
     for (const runId of activeRuns) {
       if (!(await runIsCancelled(runId))) stillActive.push(runId);
@@ -2260,6 +2264,7 @@ export async function executeResearchJob(
         'failed',
         null,
         'cancelled during research',
+        billedUsage,
       );
       return {
         completedRunIds,
@@ -2328,7 +2333,13 @@ export async function executeResearchJob(
         await incrementEnrichmentInsight(runId, 'followups_enqueued', result.followupJobIds.length);
       }
     }
-    const completedRunIds = await finishResearchJobAndLedger(job, 'done', result.domain, null);
+    const completedRunIds = await finishResearchJobAndLedger(
+      job,
+      'done',
+      result.domain,
+      null,
+      billedUsage,
+    );
     for (const runId of stillActive) await decrementRemaining(runId);
     return {
       completedRunIds,
@@ -2369,7 +2380,13 @@ export async function executeResearchJob(
     }
 
     if (job.disambiguation.research_pass === 'profile_rescue') {
-      const completedRunIds = await finishResearchJobAndLedger(job, 'failed', null, message);
+      const completedRunIds = await finishResearchJobAndLedger(
+        job,
+        'failed',
+        null,
+        message,
+        billedUsage,
+      );
       for (const runId of activeRuns) {
         await incrementEnrichmentStat(
           runId,
@@ -2444,6 +2461,7 @@ export async function executeResearchJob(
           'failed',
           null,
           'cancelled during fallback research',
+          billedUsage,
         );
         return {
           completedRunIds,
@@ -2459,7 +2477,14 @@ export async function executeResearchJob(
         true,
         dependencies,
       );
-      const completedRunIds = await finishResearchJobAndLedger(job, 'done', result.domain, null);
+      billedUsage = fallback.research_billed_usage ?? billedUsage;
+      const completedRunIds = await finishResearchJobAndLedger(
+        job,
+        'done',
+        result.domain,
+        null,
+        billedUsage,
+      );
       for (const runId of fallbackActiveRuns) {
         await decrementRemaining(runId);
       }
@@ -2531,6 +2556,7 @@ export async function executeResearchJob(
         'failed',
         null,
         `${message}; fallback: ${fallbackMessage}`,
+        billedUsage,
       );
       for (const runId of fallbackStillActive) {
         await incrementEnrichmentStat(runId, 'companies_failed');

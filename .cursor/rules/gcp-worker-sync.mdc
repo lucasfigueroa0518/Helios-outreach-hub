@@ -55,7 +55,10 @@ npm run worker:status
 - After rotating Anthropic / Supabase / Resend keys in `.env.local`, sync the
   same values into `scripts/gcp/worker.env` and redeploy. Do not assume the VM
   picked them up.
-- Prefer `DIRECT_DATABASE_URL` on the worker; keep concurrency low on e2-micro.
+- Prefer `DIRECT_DATABASE_URL` on the worker. Drafting parallelism must match
+  the laptop worker (`DRAFTING_ANTHROPIC_MAX_INFLIGHT=8` → 4 research shards +
+  1 write). That requires the paid `e2-standard-2` VM, not the original
+  e2-micro.
 - `deploy-worker-code.sh` probes `ANTHROPIC_API_KEY` before shipping; if that
   probe fails, fix the key first.
 

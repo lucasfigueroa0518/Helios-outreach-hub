@@ -1,12 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 import { loadDraftingAssets } from '@/lib/drafting/assets';
-import {
-  computeCacheAdjustedInputCostUsd,
-  computeSearchCostUsd,
-  formatUsd,
-  selectPriceSnapshot,
-} from '@/lib/drafting/cost';
+import { priceAnthropicMessages, toProviderUsage } from '@/lib/anthropic-pricing';
 import { sha256Fingerprint } from '@/lib/drafting/normalize';
 import { parseDraftingResearchPacket } from '@/lib/drafting/provider-parse';
 import {
@@ -21,6 +16,11 @@ import type {
   ReusableCompanyResearchContext,
 } from '@/lib/drafting/types';
 import { withDraftingAnthropicSlot } from '@/lib/drafting/anthropic-semaphore';
+import {
+  cacheUsageFromMessage,
+  withConversationCache,
+  withToolCache,
+} from '@/lib/anthropic-cache';
 import {
   DRAFTING_RESEARCH_FORCED_REPORT_MAX_TOKENS,
   DRAFTING_RESEARCH_MODEL,
@@ -195,14 +195,7 @@ function webSearchRequests(message: Anthropic.Message) {
 }
 
 function cacheTokens(message: Anthropic.Message) {
-  const usage = message.usage as Anthropic.Message['usage'] & {
-    cache_read_input_tokens?: number;
-    cache_creation_input_tokens?: number;
-  };
-  return {
-    cacheReadTokens: Math.max(0, Number(usage.cache_read_input_tokens ?? 0)),
-    cacheWriteTokens: Math.max(0, Number(usage.cache_creation_input_tokens ?? 0)),
-  };
+  return cacheUsageFromMessage(message);
 }
 
 function toolUseBlock(message: Anthropic.Message, name: string) {
@@ -240,15 +233,24 @@ function sumUsage(messages: Anthropic.Message[]) {
   let searches = 0;
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
+  let totalInputTokens = 0;
   for (const message of messages) {
-    inputTokens += message.usage.input_tokens ?? 0;
     outputTokens += message.usage.output_tokens ?? 0;
     searches += webSearchRequests(message);
     const cache = cacheTokens(message);
+    inputTokens += cache.inputTokens;
     cacheReadTokens += cache.cacheReadTokens;
     cacheWriteTokens += cache.cacheWriteTokens;
+    totalInputTokens += cache.totalInputTokens;
   }
-  return { inputTokens, outputTokens, searches, cacheReadTokens, cacheWriteTokens };
+  return {
+    inputTokens,
+    outputTokens,
+    searches,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalInputTokens,
+  };
 }
 
 function pendingClientToolUses(content: Anthropic.ContentBlock[]): Anthropic.ToolUseBlock[] {
@@ -273,6 +275,7 @@ async function forceResearchReport(input: {
   system: Anthropic.TextBlockParam[];
   messages: Anthropic.MessageParam[];
   messagesUsed: Anthropic.Message[];
+  tools: Anthropic.MessageCreateParams['tools'];
   maxTokens: number;
   parseError: string | null;
   searchesExhausted: boolean;
@@ -299,8 +302,8 @@ async function forceResearchReport(input: {
       model: DRAFTING_RESEARCH_MODEL,
       max_tokens: tokenBudgets[attempt],
       system: input.system,
-      messages: input.messages,
-      tools: [reportDraftingResearchTool],
+      messages: withConversationCache(input.messages),
+      tools: input.tools,
       tool_choice: { type: 'tool', name: 'report_drafting_research' },
     });
     input.messagesUsed.push(forced);
@@ -360,6 +363,11 @@ async function researchLive(input: DraftingResearchInput): Promise<DraftingResea
     name: 'web_search',
     max_uses: maxSearches,
   };
+  // Keep web_search on the forced-report turn so the tools prefix stays
+  // cacheable. Force the report with tool_choice instead of dropping the tool.
+  const tools: Anthropic.MessageCreateParams['tools'] = maxSearches > 0
+    ? [webSearchTool, withToolCache(reportDraftingResearchTool, cacheTtl)]
+    : [withToolCache(reportDraftingResearchTool, cacheTtl)];
 
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userPrompt }];
   const messagesUsed: Anthropic.Message[] = [];
@@ -371,8 +379,8 @@ async function researchLive(input: DraftingResearchInput): Promise<DraftingResea
       model: DRAFTING_RESEARCH_MODEL,
       max_tokens: researchMaxTokens,
       system,
-      messages,
-      tools: [webSearchTool, reportDraftingResearchTool],
+      messages: withConversationCache(messages),
+      tools,
       tool_choice: { type: 'auto' },
     });
     messagesUsed.push(response);
@@ -427,6 +435,7 @@ async function researchLive(input: DraftingResearchInput): Promise<DraftingResea
       system,
       messages,
       messagesUsed,
+      tools,
       maxTokens: reportMaxTokens,
       parseError,
       searchesExhausted: maxSearches === 0 || searchesUsed >= maxSearches,
@@ -454,29 +463,19 @@ async function researchLive(input: DraftingResearchInput): Promise<DraftingResea
     };
   }
 
-  const usage = sumUsage(messagesUsed);
-  const cacheTtlForCost = resolvedDraftingPromptCacheTtl();
-  const prices = selectPriceSnapshot();
-  const inputCost = computeCacheAdjustedInputCostUsd(usage.inputTokens, {
-    cacheHitTokens: usage.cacheReadTokens,
-    cacheWriteTokens: usage.cacheWriteTokens,
-    cacheTtl: cacheTtlForCost,
+  const priced = priceAnthropicMessages(messagesUsed, {
+    modelId: DRAFTING_RESEARCH_MODEL,
+    fallbackCacheTtl: resolvedDraftingPromptCacheTtl(),
   });
-  const outputCost = (usage.outputTokens / 1_000_000) * prices.outputPerMtokUsd;
-  const costUsd = formatUsd(inputCost + outputCost + computeSearchCostUsd(usage.searches));
 
   return {
     packet,
     packetSha256: sha256Fingerprint(packet),
     usage: {
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      searches: usage.searches,
-      cacheReadTokens: usage.cacheReadTokens,
-      cacheWriteTokens: usage.cacheWriteTokens,
-      costUsd,
-      calls: messagesUsed.length,
-      turns: messagesUsed.length,
+      ...toProviderUsage(priced, {
+        calls: messagesUsed.length,
+        turns: messagesUsed.length,
+      }),
       protocolBudget: {
         maxCalls,
         maxSearches,

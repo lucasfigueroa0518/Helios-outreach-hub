@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 
-import { computeTokenCostUsd, formatUsd } from '@/lib/drafting/cost';
+import { withToolCache } from '@/lib/anthropic-cache';
+import { priceAnthropicMessages, toProviderUsage } from '@/lib/anthropic-pricing';
 import { buildEffectiveLeadFields } from '@/lib/drafting/normalize';
 import { assessResearchTimeliness } from '@/lib/drafting/temporal-policy';
 import { parseDraftOutput } from '@/lib/drafting/provider-parse';
@@ -140,11 +141,12 @@ async function writeLive(input: DraftingWriteInput): Promise<DraftingWriteResult
   }
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const cacheTtl = resolvedDraftingPromptCacheTtl();
   const system = buildWriterSystemBlocks({
     skillContent: input.skillContent,
     subjectLineContent: input.subjectLineContent,
     positioningText: input.positioningText,
-    cacheTtl: resolvedDraftingPromptCacheTtl(),
+    cacheTtl,
   });
   const userPrompt = buildWriterUserPrompt({
     inputSnapshot: input.inputSnapshot,
@@ -162,7 +164,7 @@ async function writeLive(input: DraftingWriteInput): Promise<DraftingWriteResult
     max_tokens: resolvedDraftingWriterMaxTokens(),
     system,
     messages: [{ role: 'user', content: userPrompt }],
-    tools: [reportDraftOutputTool],
+    tools: [withToolCache(reportDraftOutputTool, cacheTtl)],
     tool_choice: { type: 'tool', name: 'report_draft_output' },
   });
 
@@ -171,16 +173,14 @@ async function writeLive(input: DraftingWriteInput): Promise<DraftingWriteResult
     throw new Error('Drafting writer finished without report_draft_output');
   }
 
-  const inputTokens = message.usage.input_tokens ?? 0;
-  const outputTokens = message.usage.output_tokens ?? 0;
+  const priced = priceAnthropicMessages([message], {
+    modelId: DRAFTING_WRITER_MODEL,
+    fallbackCacheTtl: cacheTtl,
+  });
 
   return {
     draft,
-    usage: {
-      inputTokens,
-      outputTokens,
-      costUsd: formatUsd(computeTokenCostUsd(inputTokens, outputTokens)),
-    },
+    usage: toProviderUsage(priced),
     providerRequestId: message.id,
     modelId: DRAFTING_WRITER_MODEL,
     promptVersion: DRAFTING_WRITER_PROMPT_VERSION,

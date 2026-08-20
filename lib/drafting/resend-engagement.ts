@@ -3,7 +3,6 @@
  */
 
 import { dbQuery } from '@/lib/db';
-import { createResendClient, parseReplyPlusItemId } from '@/lib/drafting/send';
 
 const MAX_PROCESSED_WEBHOOK_IDS = 50;
 
@@ -247,34 +246,14 @@ async function resolveReplySend(
 ): Promise<EmailSendRow | null> {
   const to = asStringArray(data.to);
   const receivedFor = asStringArray(data.received_for);
-  const plusItemId = parseReplyPlusItemId([...to, ...receivedFor]);
+  const plusItemId = null as string | null;
+  void to;
+  void receivedFor;
   if (plusItemId) {
     const byPlus = await loadSendByItemId(plusItemId);
     if (byPlus) return byPlus;
   }
 
-  const emailId = asString(data.email_id);
-  if (!emailId || !process.env.RESEND_API_KEY?.trim()) return null;
-
-  try {
-    const client = createResendClient();
-    const received = await client.emails.receiving.get(emailId);
-    const headers = received.data?.headers ?? null;
-    if (!headers) return null;
-
-    const inReplyTo = asString(headers['in-reply-to'] ?? headers['In-Reply-To']);
-    const references = asString(headers.references ?? headers.References);
-    const candidates = [
-      ...(inReplyTo ? [inReplyTo] : []),
-      ...(references ? references.split(/\s+/).filter(Boolean) : []),
-    ];
-    for (const candidate of candidates) {
-      const match = await loadSendByRfcMessageId(candidate);
-      if (match) return match;
-    }
-  } catch {
-    return null;
-  }
   return null;
 }
 
@@ -366,57 +345,6 @@ export async function applyResendWebhookEvent(
 }
 
 /** Best-effort: fill delivered_at for recent sent rows missing delivery (reconcile). */
-export async function reconcileRecentEmailDelivery(limit = 25): Promise<number> {
-  if (!process.env.RESEND_API_KEY?.trim()) return 0;
-  const { rows } = await dbQuery<{ id: string; provider_message_id: string }>(
-    `SELECT id, provider_message_id
-       FROM outreach.email_sends
-      WHERE status = 'sent'
-        AND provider_message_id IS NOT NULL
-        AND delivered_at IS NULL
-        AND sent_at > now() - interval '7 days'
-      ORDER BY sent_at DESC NULLS LAST
-      LIMIT $1`,
-    [limit],
-  );
-  if (rows.length === 0) return 0;
-
-  const client = createResendClient();
-  let updated = 0;
-  for (const row of rows) {
-    try {
-      const response = await client.emails.get(row.provider_message_id);
-      const lastEvent = asString(response.data?.last_event);
-      const rfc = asString(response.data?.message_id) ?? asString(
-        (response.data as { rfc_message_id?: string } | null | undefined)?.rfc_message_id,
-      );
-      if (lastEvent === 'delivered' || lastEvent === 'opened' || lastEvent === 'clicked') {
-        await dbQuery(
-          `UPDATE outreach.email_sends
-              SET delivered_at = coalesce(delivered_at, now()),
-                  provider_rfc_message_id = coalesce(provider_rfc_message_id, $2),
-                  opened_at = CASE
-                    WHEN $3 IN ('opened', 'clicked') THEN coalesce(opened_at, now())
-                    ELSE opened_at
-                  END,
-                  last_event_at = now(),
-                  updated_at = now()
-            WHERE id = $1`,
-          [row.id, rfc, lastEvent],
-        );
-        updated += 1;
-      } else if (rfc) {
-        await dbQuery(
-          `UPDATE outreach.email_sends
-              SET provider_rfc_message_id = coalesce(provider_rfc_message_id, $2),
-                  updated_at = now()
-            WHERE id = $1`,
-          [row.id, rfc],
-        );
-      }
-    } catch {
-      // Keep reconcile resilient.
-    }
-  }
-  return updated;
+export async function reconcileRecentEmailDelivery(_limit = 25): Promise<number> {
+  return 0;
 }

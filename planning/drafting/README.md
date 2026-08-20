@@ -26,7 +26,7 @@ barrier.
 
 The drafting behavior is controlled by two seeded source assets:
 
-- `outreach brain/first-contact-outreach-v5.md`: the verbatim writing skill.
+- `outreach brain/first-contact-outreach-v8.md`: the verbatim writing skill.
   This is the writing authority. Its five readings, sender-fact rules,
   resolution discipline, vendor-pattern bans, prose bans, and strip pass are
   not to be paraphrased away.

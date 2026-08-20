@@ -1763,8 +1763,37 @@ a.segmented__item { text-decoration: none; }
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 .campaign-row:hover { border-color: var(--color-border-strong); box-shadow: var(--shadow-sm); }
+.campaign-row--drafting {
+  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--color-border));
+}
 .campaign-row__main { min-width: 0; flex: 1; text-decoration: none; display: flex; flex-direction: column; gap: var(--space-1); }
+.campaign-row__heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
 .campaign-row__name { color: var(--color-text); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); }
+.campaign-row__drafting {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.campaign-row__drafting-spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+  flex-shrink: 0;
+}
 .campaign-row__meta { color: var(--color-text-muted); font-size: var(--font-size-xs); }
 .campaign-row__actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .archived-campaigns { margin-top: var(--space-5); color: var(--color-text-muted); }
@@ -4070,6 +4099,15 @@ body.has-site-product-menu .hub-nav-row {
 }
 .send-queue-card--overdue {
   border-color: var(--color-warning);
+}
+.send-queue-card--sent {
+  background: var(--color-positive-soft);
+  border-color: color-mix(in srgb, var(--color-positive) 40%, var(--color-border));
+  cursor: default;
+}
+.send-queue-card--sent .send-queue-card__subject,
+.send-queue-card--sent .send-queue-card__meta {
+  color: color-mix(in srgb, var(--color-positive) 55%, var(--color-text-muted));
 }
 .send-queue-card__check { margin-top: 2px; }
 .send-queue-card__body {

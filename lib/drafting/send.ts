@@ -1,16 +1,26 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { Resend } from 'resend';
-
+import {
+  agentMailReplyOutreach,
+  agentMailSendOutreach,
+  ensureOutreachInboxDisplayName,
+} from '@/lib/agentmail';
+import {
+  assertOutreachInbox,
+  formatAgentMailDisplayName,
+  isBlockedOutreachFrom,
+  type SenderIdentitySlug,
+} from '@/lib/agentmail-inboxes';
 import { dbQuery } from '@/lib/db';
 import {
   appendPlainTextSignature,
   buildOutreachEmailHtml,
-  isLucasSenderEmail,
+  identitySlugFromSender,
   LUCAS_SIGNATURE_DEFAULTS,
   resolveEmailSignature,
   SIGNATURE_HEADSHOT_CID,
+  TOMMY_SIGNATURE_DEFAULTS,
   type EmailSignatureFields,
 } from '@/lib/drafting/email-signature';
 import { replyPlainTextBodyToHtml } from '@/lib/drafting/reply-linkify';
@@ -18,7 +28,7 @@ import {
   EmailSendConfigurationError,
   EmailSendProviderError,
 } from '@/lib/drafting/errors';
-import { normalizeDraftText } from '@/lib/drafting/normalize';
+import { normalizeDraftBody, normalizeDraftText } from '@/lib/drafting/normalize';
 import { downloadStoredObject } from '@/lib/storage';
 
 export { EmailSendConfigurationError, EmailSendProviderError } from '@/lib/drafting/errors';
@@ -31,89 +41,34 @@ export type SendEmailInput = {
   bodyText: string;
   itemId?: string;
   campaignId?: string;
-  /** Optional overrides; otherwise resolved from fromEmail (Lucas hardcoded). */
   title?: string | null;
   companyName?: string | null;
   senderProfileId?: string | null;
   headshotStoragePath?: string | null;
-  /** Extra MIME headers (e.g. In-Reply-To / References for threaded replies). */
+  identitySlug?: SenderIdentitySlug | null;
   headers?: Record<string, string>;
-  /** When true, hyperlink heliosgroup.ai + Calendly in the HTML body. */
   linkifyReplyBody?: boolean;
+  inReplyToMessageId?: string | null;
+  firstName?: string | null;
 };
 
-/**
- * TEMP signature QA redirect — Campaign #3 only.
- * Remove after the HTML signature looks good in a real inbox.
- */
-export const SIGNATURE_TEST_CAMPAIGN_ID = '1fe7c162-cb1b-4bb0-b708-da6097d02753'; // Campaign #3
-export const SIGNATURE_TEST_TO_EMAIL = 'lafballsports@gmail.com';
-
-/** Apply the Campaign #3 signature-test recipient override when applicable. */
-export function resolveSendToEmail(campaignId: string | null | undefined, toEmail: string): string {
-  if ((campaignId ?? '').trim().toLowerCase() === SIGNATURE_TEST_CAMPAIGN_ID) {
-    return SIGNATURE_TEST_TO_EMAIL;
-  }
+export function resolveSendToEmail(_campaignId: string | null | undefined, toEmail: string): string {
   return toEmail.trim().toLowerCase();
 }
 
 export type SendEmailResult = {
-  provider: 'resend';
+  provider: 'agentmail';
   providerMessageId: string;
+  providerThreadId: string;
 };
 
-/** True when Resend can be invoked (API key present). Does not call the API. */
 export function isEmailSendConfigured(): boolean {
-  return Boolean(process.env.RESEND_API_KEY?.trim());
+  return Boolean(process.env.AGENT_MAIL_API?.trim());
 }
 
-export function resendReplyDomain(): string {
-  return (process.env.RESEND_REPLY_DOMAIN?.trim() || 'replies.heliosgroup.ai').toLowerCase();
-}
-
-/**
- * Reply-To plus-address for outbound outreach.
- * Prospect replies land in Resend inbound (reply+{itemId}@RESEND_REPLY_DOMAIN)
- * so the auto-response worker can draft and send.
- */
-export function replyToAddressForItem(itemId: string): string {
-  const clean = itemId.trim().toLowerCase();
-  return `reply+${clean}@${resendReplyDomain()}`;
-}
-
-/** @deprecated Prefer {@link replyToAddressForItem}; kept for tests/legacy callers. */
 export function outboundReplyToAddress(fromEmail: string): string | undefined {
-  const email = fromEmail.trim();
+  const email = fromEmail.trim().toLowerCase();
   return email || undefined;
-}
-
-export function parseReplyPlusItemId(
-  addresses: string | string[] | null | undefined,
-): string | null {
-  const list = Array.isArray(addresses) ? addresses : addresses ? [addresses] : [];
-  const domain = resendReplyDomain().replace(/\./g, '\\.');
-  const pattern = new RegExp(`^reply\\+([0-9a-f-]{36})@${domain}$`, 'i');
-  for (const raw of list) {
-    const addr = raw.trim().toLowerCase().replace(/^.*</, '').replace(/>.*$/, '');
-    const match = addr.match(pattern);
-    if (match?.[1]) return match[1].toLowerCase();
-  }
-  return null;
-}
-
-function resolvedFromAddress(input: SendEmailInput): string {
-  const override = process.env.RESEND_FROM_EMAIL?.trim();
-  const email = override || input.fromEmail.trim();
-  const name = input.fromName.trim() || email;
-  return `${name} <${email}>`;
-}
-
-export function createResendClient(): Resend {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
-  if (!apiKey) {
-    throw new EmailSendConfigurationError('RESEND_API_KEY is not configured');
-  }
-  return new Resend(apiKey);
 }
 
 type InlineHeadshot = {
@@ -123,7 +78,6 @@ type InlineHeadshot = {
   contentId: string;
 };
 
-/** Resolve storage path from payload, then live sender_profiles (id or email). */
 async function resolveHeadshotStoragePath(input: SendEmailInput): Promise<string | null> {
   const direct = input.headshotStoragePath?.trim();
   if (direct) return direct;
@@ -139,46 +93,36 @@ async function resolveHeadshotStoragePath(input: SendEmailInput): Promise<string
     const fromId = rows[0]?.headshot_storage_path?.trim();
     if (fromId) return fromId;
   }
-
-  const workEmail = input.fromEmail.trim().toLowerCase();
-  if (!workEmail) return null;
-  const { rows } = await dbQuery<{ headshot_storage_path: string | null }>(
-    `SELECT headshot_storage_path
-       FROM outreach.sender_profiles
-      WHERE lower(work_email) = $1
-        AND headshot_storage_path IS NOT NULL
-        AND length(trim(headshot_storage_path)) > 0
-      ORDER BY is_default DESC, updated_at DESC
-      LIMIT 1`,
-    [workEmail],
-  );
-  return rows[0]?.headshot_storage_path?.trim() || null;
+  return null;
 }
 
-/**
- * Load headshot bytes for EVERY sender and inline as a CID attachment.
- * Never rely on remote http(s) image URLs in outbound email HTML.
- */
 async function loadInlineHeadshot(input: SendEmailInput): Promise<InlineHeadshot | null> {
+  const slug = identitySlugFromSender({
+    identitySlug: input.identitySlug,
+    workEmail: input.fromEmail,
+    displayName: input.fromName,
+  });
+  const defaults = slug === 'tommy' ? TOMMY_SIGNATURE_DEFAULTS : LUCAS_SIGNATURE_DEFAULTS;
   try {
-    if (isLucasSenderEmail(input.fromEmail)) {
-      const filePath = path.join(
-        process.cwd(),
-        'public',
-        LUCAS_SIGNATURE_DEFAULTS.headshotPublicPath.replace(/^\//, ''),
-      );
-      const content = await readFile(filePath);
-      return {
-        content,
-        filename: 'lucas-figueroa.jpg',
-        contentType: 'image/jpeg',
-        contentId: SIGNATURE_HEADSHOT_CID,
-      };
-    }
+    const filePath = path.join(
+      process.cwd(),
+      'public',
+      defaults.headshotPublicPath.replace(/^\//, ''),
+    );
+    const content = await readFile(filePath);
+    return {
+      content,
+      filename: path.basename(defaults.headshotPublicPath),
+      contentType: defaults.headshotPublicPath.endsWith('.png') ? 'image/png' : 'image/jpeg',
+      contentId: SIGNATURE_HEADSHOT_CID,
+    };
+  } catch {
+    // Fall through to uploaded storage headshot.
+  }
 
+  try {
     const storagePath = await resolveHeadshotStoragePath(input);
     if (!storagePath) return null;
-
     const content = await downloadStoredObject(storagePath);
     const isPng = storagePath.toLowerCase().endsWith('.png');
     return {
@@ -206,6 +150,7 @@ function resolveSendSignature(
 ): EmailSignatureFields {
   return resolveEmailSignature({
     workEmail: input.fromEmail,
+    identitySlug: input.identitySlug,
     displayName: input.fromName,
     title: input.title,
     companyName: input.companyName,
@@ -215,27 +160,34 @@ function resolveSendSignature(
   });
 }
 
-/** Send one outreach email through Resend (HTML signature + plain-text fallback). */
+/** Send one outreach email through Agent Mail (HTML signature + plain-text fallback). */
 export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmailResult> {
+  if (!isEmailSendConfigured()) {
+    throw new EmailSendConfigurationError('AGENT_MAIL_API is not configured');
+  }
+
   const toEmail = resolveSendToEmail(input.campaignId, input.toEmail);
   if (!toEmail || !toEmail.includes('@')) {
     throw new EmailSendProviderError('Recipient email is missing or invalid');
   }
 
+  const fromEmail = assertOutreachInbox(input.fromEmail);
+  if (isBlockedOutreachFrom(fromEmail)) {
+    throw new EmailSendProviderError(`Outreach cannot send from ${input.fromEmail}`);
+  }
+
   const subject = normalizeDraftText(input.subject).replace(/\n/g, ' ').trim();
-  const bodyText = normalizeDraftText(input.bodyText);
+  const bodyText = normalizeDraftBody(input.bodyText, input.firstName);
   if (!subject || !bodyText) {
     throw new EmailSendProviderError('Subject and body are required to send');
   }
 
-  // Inline EVERY sender headshot as a CID attachment (no remote image fetches in Gmail).
   const headshot = await loadInlineHeadshot(input);
   const signature = resolveSendSignature(
     input,
     headshot ? `cid:${headshot.contentId}` : null,
   );
   if (signature.headshotUrl && !signature.headshotUrl.startsWith('cid:')) {
-    // Hard guard: never ship http(s) signature images.
     signature.headshotUrl = null;
   }
   const text = appendPlainTextSignature(bodyText, signature);
@@ -245,50 +197,67 @@ export async function sendOutreachEmail(input: SendEmailInput): Promise<SendEmai
     input.linkifyReplyBody ? { bodyToHtml: replyPlainTextBodyToHtml } : undefined,
   );
 
-  const tags: Array<{ name: string; value: string }> = [];
-  if (input.itemId?.trim()) tags.push({ name: 'item_id', value: input.itemId.trim() });
-  if (input.campaignId?.trim()) tags.push({ name: 'campaign_id', value: input.campaignId.trim() });
-
-  const itemId = input.itemId?.trim();
-  const replyTo = itemId ? replyToAddressForItem(itemId) : outboundReplyToAddress(input.fromEmail);
-  const headers = input.headers && Object.keys(input.headers).length > 0
-    ? input.headers
-    : undefined;
-
-  const client = createResendClient();
-  const response = await client.emails.send({
-    from: resolvedFromAddress(input),
-    to: [toEmail],
-    subject,
-    text,
-    html,
-    replyTo,
-    headers,
-    tags: tags.length > 0 ? tags : undefined,
-    attachments: headshot
-      ? [{
-          content: headshot.content,
-          filename: headshot.filename,
-          contentType: headshot.contentType,
-          contentId: headshot.contentId,
-        }]
-      : undefined,
-  });
-
-  if (response.error) {
-    throw new EmailSendProviderError(
-      response.error.message || 'Resend rejected the send request',
-      response.error.message,
+  const labels = ['helios-outreach'];
+  if (input.itemId?.trim()) labels.push(`item-${input.itemId.trim().slice(0, 8)}`);
+  if (input.campaignId?.trim()) labels.push(`campaign-${input.campaignId.trim().slice(0, 8)}`);
+  const fromHeader = formatAgentMailDisplayName(input.fromName, fromEmail);
+  try {
+    await ensureOutreachInboxDisplayName(fromEmail, input.fromName);
+  } catch (error) {
+    console.warn(
+      `[agentmail] failed to set inbox display name for ${fromEmail}:`,
+      error instanceof Error ? error.message : error,
     );
   }
 
-  const providerMessageId = response.data?.id?.trim();
-  if (!providerMessageId) {
-    throw new EmailSendProviderError('Resend accepted the request but returned no message id');
-  }
+  try {
+    const result = input.inReplyToMessageId
+      ? await agentMailReplyOutreach({
+          inboxId: fromEmail,
+          messageId: input.inReplyToMessageId,
+          text,
+          html,
+          labels,
+          attachments: headshot
+            ? [{
+                filename: headshot.filename,
+                contentType: headshot.contentType,
+                content: headshot.content,
+                contentId: headshot.contentId,
+                inline: true,
+              }]
+            : undefined,
+        })
+      : await agentMailSendOutreach({
+          inboxId: fromEmail,
+          to: toEmail,
+          subject,
+          text,
+          html,
+          replyTo: fromEmail,
+          labels,
+          headers: {
+            ...(input.headers ?? {}),
+            From: fromHeader,
+          },
+          attachments: headshot
+            ? [{
+                filename: headshot.filename,
+                contentType: headshot.contentType,
+                content: headshot.content,
+                contentId: headshot.contentId,
+                inline: true,
+              }]
+            : undefined,
+        });
 
-  return {
-    provider: 'resend',
-    providerMessageId,
-  };
+    return {
+      provider: 'agentmail',
+      providerMessageId: result.message_id,
+      providerThreadId: result.thread_id,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new EmailSendProviderError(message || 'Agent Mail rejected the send request', message);
+  }
 }

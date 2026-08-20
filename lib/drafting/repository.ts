@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { PoolClient } from 'pg';
 
+import { inferIdentitySlug } from '@/lib/agentmail-inboxes';
 import { assertCampaignOwner } from '@/lib/auth';
 import { formatEmailStatus } from '@/lib/campaign-sheet';
 import { dbQuery, dbTransaction } from '@/lib/db';
@@ -51,9 +52,8 @@ import {
 } from '@/lib/drafting/exports';
 import {
   DAILY_SEND_CAP,
-  enqueueOverflowBatch,
   enqueueOverflowSend,
-  executeImmediateResend,
+  formatNyDate,
   loadActiveQueueByItemIds,
   ownerQueueStats,
   todayRemaining,
@@ -81,6 +81,7 @@ import {
   extractFirstName,
   inputFingerprint,
   missingRequiredFields,
+  normalizeDraftBody,
   normalizeDraftText,
   normalizeEmail,
   normalizeRequiredField,
@@ -555,7 +556,7 @@ function summarizeItem(
     draft: draft
       ? {
           subject: draft.subject,
-          body_text: draft.body_text,
+          body_text: normalizeDraftBody(draft.body_text, effective.firstName),
           content_revision: Number(draft.content_revision),
           lint_hard: lint.hard.length,
           lint_warnings: lint.warnings.length,
@@ -684,6 +685,10 @@ function buildInputSnapshotFromLead(input: {
     sender: {
       profileId: input.sender.id,
       profileRevision: Number(input.sender.revision),
+      identitySlug: inferIdentitySlug({
+        workEmail: input.sender.work_email,
+        displayName: input.sender.display_name,
+      }),
       displayName: input.sender.display_name,
       workEmail: input.sender.work_email,
       title: input.sender.title,
@@ -1413,7 +1418,7 @@ export async function getWorkspaceSnapshot(
   }
   const sendBlockingReasons: string[] = [];
   if (!sendConfigured) {
-    sendBlockingReasons.push('Add RESEND_API_KEY to .env.local to enable sending');
+    sendBlockingReasons.push('Add AGENT_MAIL_API to .env.local to enable sending');
   } else if (nonLiveSendable) {
     sendBlockingReasons.push(
       'Stub/legacy drafts cannot be sent — regenerate with DRAFTING_MODE=live',
@@ -2294,7 +2299,7 @@ export async function saveDraft(
   const subject = input.subject ?? existing?.subject ?? '';
   const sender = item.input_snapshot.sender;
   const bodyText = stripTrailingTextSignature(
-    normalizeDraftText(input.bodyText ?? existing?.body_text ?? ''),
+    normalizeDraftBody(input.bodyText ?? existing?.body_text ?? '', buildEffectiveLeadFields(item.input_snapshot, item.input_overrides).firstName),
     {
       displayName: sender.displayName,
       title: sender.title,
@@ -2851,37 +2856,6 @@ async function dispatchDraftSend(
     };
   }
 
-  const remaining = options.forceImmediate ? 1 : await todayRemaining(ownerId);
-  if (remaining > 0) {
-    const result = await executeImmediateResend({
-      itemId: row.itemId,
-      campaignId,
-      fromName: row.fromName,
-      fromEmail: row.fromEmail,
-      toEmail: row.toEmail,
-      subject: row.subject,
-      bodyText: row.bodyText,
-      title: row.senderTitle,
-      companyName: row.senderCompanyName,
-      senderProfileId: row.senderProfileId,
-      headshotStoragePath: row.headshotStoragePath,
-    });
-    if (result.status === 'sent') {
-      return {
-        item_id: row.itemId,
-        recipient,
-        status: 'sent',
-        provider_message_id: result.providerMessageId,
-      };
-    }
-    return {
-      item_id: row.itemId,
-      recipient,
-      status: 'failed',
-      error: result.error,
-    };
-  }
-
   const queued = await enqueueOverflowSend({
     ownerId,
     itemId: row.itemId,
@@ -2890,6 +2864,42 @@ async function dispatchDraftSend(
     subject: row.subject,
     recipientName: recipient,
   });
+  if (queued.schedule_date === formatNyDate() && queued.from_email) {
+    const { sendNowQueueItems } = await import('@/lib/drafting/send-queue');
+    try {
+      const nowResult = await sendNowQueueItems({ ownerId, ids: [queued.id] });
+      const sent = nowResult.results[0];
+      if (sent?.status === 'sent') {
+        return {
+          item_id: row.itemId,
+          recipient,
+          status: 'sent',
+          queue_id: queued.id,
+          schedule_date: queued.schedule_date,
+        };
+      }
+      if (sent?.status === 'queued') {
+        return {
+          item_id: row.itemId,
+          recipient,
+          status: 'queued',
+          queue_id: queued.id,
+          schedule_date: sent.schedule_date ?? queued.schedule_date,
+        };
+      }
+      if (sent?.status === 'failed') {
+        return {
+          item_id: row.itemId,
+          recipient,
+          status: 'failed',
+          error: sent.error,
+          queue_id: queued.id,
+        };
+      }
+    } catch {
+      // Capacity or send-now refusal — leave queued for the scheduled slot.
+    }
+  }
   return {
     item_id: row.itemId,
     recipient,
@@ -2901,7 +2911,7 @@ async function dispatchDraftSend(
 
 export async function sendApprovedDraft(itemId: string, ownerId: string): Promise<DraftSendResult> {
   if (!isEmailSendConfigured()) {
-    throw new EmailSendConfigurationError('RESEND_API_KEY is not configured');
+    throw new EmailSendConfigurationError('AGENT_MAIL_API is not configured');
   }
 
   const { campaignId } = await getOwnedItemContext(itemId, ownerId);
@@ -2937,7 +2947,7 @@ export async function sendCampaignApprovedDrafts(
   results: DraftSendResult[];
 }> {
   if (!isEmailSendConfigured()) {
-    throw new EmailSendConfigurationError('RESEND_API_KEY is not configured');
+    throw new EmailSendConfigurationError('AGENT_MAIL_API is not configured');
   }
 
   const { rows: allRows } = await loadSendableDraftRows(campaignId, ownerId);
@@ -2969,7 +2979,6 @@ export async function sendCampaignApprovedDrafts(
     }
   }
 
-  let remaining = await todayRemaining(ownerId);
   const results: DraftSendResult[] = [];
 
   for (const row of alreadyQueued) {
@@ -2983,21 +2992,11 @@ export async function sendCampaignApprovedDrafts(
     });
   }
 
-  const overflow: ApprovedDraftExportRow[] = [];
-  for (const row of unsentRows) {
-    if (remaining > 0) {
-      const result = await dispatchDraftSend(row, campaignId, ownerId, { forceImmediate: true });
-      results.push(result);
-      if (result.status === 'sent') remaining -= 1;
-    } else {
-      overflow.push(row);
-    }
-  }
-
-  if (overflow.length > 0) {
+  if (unsentRows.length > 0) {
+    const { enqueueOverflowBatch, sendNowQueueItems } = await import('@/lib/drafting/send-queue');
     const queuedRows = await enqueueOverflowBatch(
       ownerId,
-      overflow.map((row) => ({
+      unsentRows.map((row) => ({
         ownerId,
         itemId: row.itemId,
         campaignId,
@@ -3006,15 +3005,51 @@ export async function sendCampaignApprovedDrafts(
         recipientName: row.toFullName || row.toEmail,
       })),
     );
-    for (let i = 0; i < overflow.length; i += 1) {
-      const row = overflow[i]!;
-      const queued = queuedRows[i]!;
+    const byItem = new Map(queuedRows.map((row) => [row.drafting_item_id, row]));
+    const today = formatNyDate();
+    const todayIds = queuedRows
+      .filter((row) => row.schedule_date === today && row.from_email)
+      .map((row) => row.id);
+    const sendByQueue = new Map<string, { status: 'sent' | 'failed' | 'queued'; error?: string; schedule_date?: string }>();
+    if (todayIds.length > 0) {
+      try {
+        const nowResult = await sendNowQueueItems({ ownerId, ids: todayIds });
+        for (const result of nowResult.results) {
+          sendByQueue.set(result.queue_id, result);
+        }
+      } catch {
+        // Capacity or send-now refusal — leave queued for the scheduled slot.
+      }
+    }
+    for (const row of unsentRows) {
+      const queued = byItem.get(row.itemId);
+      const sent = queued ? sendByQueue.get(queued.id) : undefined;
+      if (sent?.status === 'sent') {
+        results.push({
+          item_id: row.itemId,
+          recipient: row.toFullName || row.toEmail,
+          status: 'sent',
+          queue_id: queued?.id,
+          schedule_date: queued?.schedule_date,
+        });
+        continue;
+      }
+      if (sent?.status === 'failed') {
+        results.push({
+          item_id: row.itemId,
+          recipient: row.toFullName || row.toEmail,
+          status: 'failed',
+          error: sent.error,
+          queue_id: queued?.id,
+        });
+        continue;
+      }
       results.push({
         item_id: row.itemId,
         recipient: row.toFullName || row.toEmail,
         status: 'queued',
-        queue_id: queued.id,
-        schedule_date: queued.schedule_date,
+        queue_id: queued?.id,
+        schedule_date: sent?.schedule_date ?? queued?.schedule_date,
       });
     }
   }

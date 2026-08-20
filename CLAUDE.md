@@ -36,6 +36,17 @@ database — not `contacts`, not `accounts`, not `companies`, not `opportunities
   find yourself writing a loop over all contacts/companies to enrich them, STOP — that is
   forbidden and would be an expensive mistake.
 
+### Prompt caching (standing cost rule)
+Whenever we call the Claude Messages API, **use prompt caching**. A new or
+changed `messages.create` that sends a stable prefix (system instructions,
+skills, positioning, tool/report schemas, catalogs) without `cache_control`
+is a defect. Put static content first (tools → system → messages), mark the
+last identical block, keep the tools array stable across turns, and never
+put the only breakpoint on a per-request suffix (lead payload, timestamp,
+image, PDF). Helpers: `lib/anthropic-cache.ts`. Full guide:
+`docs/prompt-caching.md` (official API:
+https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+
 ## Testing
 Automated tests are **light and never call the live Claude API or `web_search`**
 — test pure functions + SQL + plumbing offline, stubbing the model with canned
@@ -60,3 +71,5 @@ qualitative reading of research output as acceptance.
   drafting / extraction / send-queue worker logic or worker env vars must also
   redeploy the GCP VM via `./scripts/gcp/deploy-worker-code.sh` in the same
   session (see `.cursor/rules/gcp-worker-sync.mdc`).
+- **Prompt caching:** Prefer cache hits over paying full input on every lead.
+  See the standing rule above and `docs/prompt-caching.md`.

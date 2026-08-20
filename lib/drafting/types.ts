@@ -248,6 +248,7 @@ export type InputSnapshotProvenance = {
 export type InputSnapshotSender = {
   profileId: string;
   profileRevision: number;
+  identitySlug?: 'lucas' | 'tommy' | null;
   displayName: string;
   workEmail: string;
   title: string;

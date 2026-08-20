@@ -1,4 +1,5 @@
 import { dbQuery } from '@/lib/db';
+import { AGENTMAIL_ACCOUNT_PAUSE_RETRY_MS } from '@/lib/drafting/agentmail-send-errors';
 import { listPendingJobsForRun } from '@/lib/drafting/transport';
 import { extractOneUpload } from '@/lib/run-extraction';
 import type {
@@ -506,6 +507,13 @@ async function handleReplyRespond(
 ): Promise<WorkHandlerResult> {
   const { processReplyRespond } = await import('@/lib/drafting/reply-pipeline');
   const result = await processReplyRespond(job.payload.replySendId);
+  if (result.status === 'provider_paused') {
+    throw new RetryableWorkError(
+      result.error ?? 'Agent Mail sending paused',
+      Math.max(5_000, result.retryDelayMs ?? AGENTMAIL_ACCOUNT_PAUSE_RETRY_MS),
+      'agentmail_account_paused',
+    );
+  }
   if (result.status === 'not_ready') {
     throw new RetryableWorkError('reply_respond_not_ready', 15_000, 'reply_respond_not_ready');
   }
@@ -520,6 +528,13 @@ async function handleReplyFollowup(
 ): Promise<WorkHandlerResult> {
   const { processReplyFollowup } = await import('@/lib/drafting/reply-pipeline');
   const result = await processReplyFollowup(job.payload.replySendId);
+  if (result.status === 'provider_paused') {
+    throw new RetryableWorkError(
+      result.error ?? 'Agent Mail sending paused',
+      Math.max(5_000, result.retryDelayMs ?? AGENTMAIL_ACCOUNT_PAUSE_RETRY_MS),
+      'agentmail_account_paused',
+    );
+  }
   if (result.status === 'not_ready') {
     throw new RetryableWorkError('reply_followup_not_ready', 60_000, 'reply_followup_not_ready');
   }
@@ -534,12 +549,13 @@ async function handleEmailSend(
 ): Promise<WorkHandlerResult> {
   const { processQueuedEmailSend } = await import('@/lib/drafting/send-queue');
   const result = await processQueuedEmailSend(job.payload.queueId);
-  if (result.status === 'transient') {
-    // Clear transient Resend 429/5xx only — permanent failures stay for user Retry.
+  if (result.status === 'transient' || result.status === 'provider_paused') {
     throw new RetryableWorkError(
-      result.error ?? 'Transient send failure',
+      result.error ?? (result.status === 'provider_paused'
+        ? 'Agent Mail sending paused'
+        : 'Transient send failure'),
       Math.max(5_000, result.retryDelayMs ?? 15_000),
-      'resend_transient',
+      result.status === 'provider_paused' ? 'agentmail_account_paused' : 'agentmail_transient',
     );
   }
   // Permanent send failures stay on the queue row for user Retry; do not
@@ -699,7 +715,7 @@ async function handleReconcile(
     // Keep reconcile resilient.
   }
 
-  // Best-effort Resend delivery gap-fill (webhooks are the live path).
+  // Best-effort delivery gap-fill (Agent Mail webhooks are the live path).
   let emailDeliveryReconciled = 0;
   try {
     const { reconcileRecentEmailDelivery } = await import('@/lib/drafting/resend-engagement');
@@ -708,10 +724,26 @@ async function handleReconcile(
     // Keep reconcile resilient.
   }
 
+  let inboundReconciled = 0;
+  try {
+    const { reconcileAgentMailInbound } = await import('@/lib/drafting/agentmail-engagement');
+    inboundReconciled = await reconcileAgentMailInbound(40);
+  } catch {
+    // Keep reconcile resilient.
+  }
+
   let emailSendQueueRevived = 0;
   try {
     const { reconcileEmailSendQueue } = await import('@/lib/drafting/send-queue');
     emailSendQueueRevived = await reconcileEmailSendQueue(50);
+  } catch {
+    // Keep reconcile resilient.
+  }
+
+  let pausedRepliesRevived = 0;
+  try {
+    const { reconcilePausedReplySends } = await import('@/lib/drafting/reply-pipeline');
+    pausedRepliesRevived = await reconcilePausedReplySends(50);
   } catch {
     // Keep reconcile resilient.
   }
@@ -734,6 +766,23 @@ async function handleReconcile(
       ]);
       dashboardsDailyEnqueued = 1;
     }
+  } catch {
+    // Keep reconcile resilient.
+  }
+
+  let anthropicCostSyncEnqueued = 0;
+  try {
+    const hourKey = new Date().toISOString().slice(0, 13);
+    await enqueueWorkBatch([
+      child(
+        'anthropic.cost_sync',
+        { reason: 'scheduled' },
+        hourKey,
+        'anthropic',
+        { maxAttempts: 2, priority: -8 },
+      ),
+    ]);
+    anthropicCostSyncEnqueued = 1;
   } catch {
     // Keep reconcile resilient.
   }
@@ -771,8 +820,11 @@ async function handleReconcile(
       draftingRunsFinalized,
       gatesWarmed,
       emailDeliveryReconciled,
+      inboundReconciled,
       emailSendQueueRevived,
+      pausedRepliesRevived,
       dashboardsDailyEnqueued,
+      anthropicCostSyncEnqueued,
       staleWorkersRemoved,
     },
   };
@@ -790,6 +842,28 @@ async function handleDashboardsDailyUpdate(
       totalSynced: results.reduce((n, r) => n + r.synced, 0),
       totalGenerated: results.filter((r) => r.generated).length,
       failures: results.filter((r) => r.syncError || r.generateError).length,
+    },
+  };
+}
+
+async function handleAnthropicCostSync(
+  job: OrchestrationJob<'anthropic.cost_sync'>,
+): Promise<WorkHandlerResult> {
+  if (!process.env.ANTHROPIC_ADMIN_API_KEY?.trim()) {
+    return {
+      result: {
+        skipped: true,
+        reason: job.payload.reason ?? null,
+        detail: 'ANTHROPIC_ADMIN_API_KEY missing',
+      },
+    };
+  }
+  const { syncAnthropicCostReportDays } = await import('@/lib/anthropic-cost-api');
+  const synced = await syncAnthropicCostReportDays();
+  return {
+    result: {
+      reason: job.payload.reason ?? null,
+      ...synced,
     },
   };
 }
@@ -819,6 +893,7 @@ const HANDLERS: Record<WorkKind, Handler> = {
   'reply.respond': handleReplyRespond as Handler,
   'reply.followup': handleReplyFollowup as Handler,
   'dashboards.daily_update': handleDashboardsDailyUpdate as Handler,
+  'anthropic.cost_sync': handleAnthropicCostSync as Handler,
   'system.reconcile': handleReconcile as Handler,
 };
 

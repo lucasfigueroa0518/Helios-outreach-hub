@@ -1,7 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 import { withDraftingAnthropicSlot } from '@/lib/drafting/anthropic-semaphore';
-import { computeTokenCostUsd, formatUsd } from '@/lib/drafting/cost';
+import {
+  cachedSystemText,
+  withConversationCache,
+  withToolCache,
+} from '@/lib/anthropic-cache';
+import { priceAnthropicMessages, toProviderUsage } from '@/lib/anthropic-pricing';
 import { loadReplyAssets } from '@/lib/drafting/reply-assets';
 import {
   REPLY_CALENDLY_URL,
@@ -9,16 +14,19 @@ import {
 } from '@/lib/drafting/reply-constants';
 import {
   REPLY_PROMPT_VERSION,
-  REPLY_TOOLS,
   buildReplySystemPrompt,
   buildReplyUserPrompt,
   isReplyDisposition,
+  lookupHeliosPositioningTool,
+  referHeliosWebsiteTool,
+  reportReplyOutputTool,
   type ReplyPromptContext,
 } from '@/lib/drafting/reply-prompt';
 import {
   DRAFTING_WRITER_MODEL,
   assertLiveDraftingAllowed,
   getDraftingMode,
+  resolvedDraftingPromptCacheTtl,
   resolvedDraftingWriterMaxTokens,
 } from '@/lib/models';
 
@@ -182,12 +190,17 @@ async function writeLive(input: ReplyWriteInput): Promise<ReplyWriteOutput> {
 
   const assets = await loadReplyAssets();
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const system = buildReplySystemPrompt(assets.skill.content);
+  const cacheTtl = resolvedDraftingPromptCacheTtl();
+  const system = cachedSystemText(buildReplySystemPrompt(assets.skill.content), cacheTtl);
   const userPrompt = buildReplyUserPrompt({ ...input, skillContent: assets.skill.content });
+  const tools = [
+    lookupHeliosPositioningTool,
+    referHeliosWebsiteTool,
+    withToolCache(reportReplyOutputTool, cacheTtl),
+  ];
 
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userPrompt }];
-  let inputTokens = 0;
-  let outputTokens = 0;
+  const billedMessages: Anthropic.Message[] = [];
   let lastMessageId = '';
   const usedToolNames = new Set<string>();
 
@@ -196,12 +209,11 @@ async function writeLive(input: ReplyWriteInput): Promise<ReplyWriteOutput> {
       model: DRAFTING_WRITER_MODEL,
       max_tokens: resolvedDraftingWriterMaxTokens(),
       system,
-      messages,
-      tools: [...REPLY_TOOLS],
+      messages: withConversationCache(messages),
+      tools,
     });
     lastMessageId = message.id;
-    inputTokens += message.usage.input_tokens ?? 0;
-    outputTokens += message.usage.output_tokens ?? 0;
+    billedMessages.push(message);
 
     const toolUses = message.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
@@ -214,11 +226,10 @@ async function writeLive(input: ReplyWriteInput): Promise<ReplyWriteOutput> {
       return {
         ...parsed,
         usedTools: [...usedToolNames],
-        usage: {
-          inputTokens,
-          outputTokens,
-          costUsd: formatUsd(computeTokenCostUsd(inputTokens, outputTokens)),
-        },
+        usage: toProviderUsage(priceAnthropicMessages(billedMessages, {
+          modelId: DRAFTING_WRITER_MODEL,
+          fallbackCacheTtl: cacheTtl,
+        })),
         providerRequestId: lastMessageId,
         modelId: DRAFTING_WRITER_MODEL,
         promptVersion: REPLY_PROMPT_VERSION,

@@ -1,21 +1,32 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { CalendarClock, Send, SquareSplitVertical, Trash2, RotateCcw, X } from 'lucide-react';
 
 import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
 import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { requestJson } from '@/lib/client-request';
+import { isAgentMailAccountSendingPausedError } from '@/lib/drafting/agentmail-send-errors';
 import { formatNyDateLabel } from '@/lib/drafting/send-queue-schedule';
 import type { QueueDayBucket, QueueListItem, ShareTargetUser } from '@/lib/drafting/send-queue';
 
 type QueueListResponse = {
   days: QueueDayBucket[];
   today: string;
+  from?: string;
+  to?: string;
   today_remaining: number;
-  owner_id?: string;
-  viewing_other?: boolean;
+  daily_inbox_cap?: number;
+  identities?: Array<{ slug: 'lucas' | 'tommy'; display_name: string }>;
+  inboxes?: Array<{
+    id: string;
+    email: string;
+    identity_slug: 'lucas' | 'tommy';
+    is_primary: boolean;
+    today_used: number;
+    today_remaining: number;
+  }>;
 };
 
 type QueueDetailResponse = {
@@ -27,6 +38,23 @@ type QueueDetailResponse = {
 type CampaignOption = { id: string; name: string };
 type UserOption = { id: string; email: string; display_name: string };
 
+function formatNyDateTime(iso: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(iso));
+}
+
+function queueCardStatus(item: QueueListItem): string {
+  if (item.status === 'queued' && isAgentMailAccountSendingPausedError(item.error_message ?? '')) {
+    return `waiting on Agent Mail · retry ${formatNyDateTime(item.scheduled_for)}`;
+  }
+  return item.status;
+}
+
 export function SendQueueHub({
   sessionUserId,
   sessionEmail,
@@ -37,6 +65,8 @@ export function SendQueueHub({
   const [data, setData] = useState<QueueListResponse | null>(null);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [viewUserId, setViewUserId] = useState('');
+  const [identitySlug, setIdentitySlug] = useState('');
+  const [inboxEmail, setInboxEmail] = useState('');
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
   const [campaignId, setCampaignId] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -51,19 +81,19 @@ export function SendQueueHub({
   const [shareTargets, setShareTargets] = useState<ShareTargetUser[] | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const shareMenuRef = useRef<HTMLDivElement>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const alignedTodayRef = useRef(false);
   const hasDataRef = useRef(false);
 
-  const ownerPayload = useMemo(
-    () => (viewUserId ? { user_id: viewUserId } : {}),
-    [viewUserId],
-  );
+  const ownerPayload = useMemo(() => ({}), []);
 
   const load = useCallback(async (force = false) => {
     if (!hasDataRef.current) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (campaignId) params.set('campaign_id', campaignId);
-      if (viewUserId) params.set('user_id', viewUserId);
+      if (identitySlug) params.set('identity', identitySlug);
+      if (inboxEmail) params.set('inbox', inboxEmail);
       const qs = params.toString();
       const url = `/api/send-queue${qs ? `?${qs}` : ''}`;
       const result = await hubGetJson<QueueListResponse>(url, { force });
@@ -75,11 +105,24 @@ export function SendQueueHub({
     } finally {
       setLoading(false);
     }
-  }, [campaignId, viewUserId]);
+  }, [campaignId, identitySlug, inboxEmail]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    alignedTodayRef.current = false;
+  }, [campaignId, identitySlug, inboxEmail]);
+
+  useLayoutEffect(() => {
+    if (!data || alignedTodayRef.current) return;
+    const board = boardRef.current;
+    const todayCol = board?.querySelector<HTMLElement>('.send-queue-day--today');
+    if (!board || !todayCol) return;
+    board.scrollLeft = todayCol.offsetLeft - board.offsetLeft;
+    alignedTodayRef.current = true;
+  }, [data]);
 
   useEffect(() => {
     void hubGetJson<{ users: UserOption[] }>('/api/users')
@@ -177,7 +220,10 @@ export function SendQueueHub({
   function selectAllDay(day: QueueDayBucket) {
     setSelected((prev) => {
       const next = new Set(prev);
-      const ids = day.items.map((i) => i.id);
+      const ids = day.items
+        .filter((item) => item.status === 'queued' || item.status === 'failed')
+        .map((i) => i.id);
+      if (ids.length === 0) return next;
       const allSelected = ids.every((id) => next.has(id));
       if (allSelected) {
         for (const id of ids) next.delete(id);
@@ -243,10 +289,9 @@ export function SendQueueHub({
     setShareLoading(true);
     try {
       const params = new URLSearchParams();
-      if (viewUserId) params.set('user_id', viewUserId);
-      const qs = params.toString();
+      params.set('identity', identitySlug === 'tommy' ? 'tommy' : 'lucas');
       const result = await requestJson<{ users: ShareTargetUser[] }>(
-        `/api/send-queue/share-targets${qs ? `?${qs}` : ''}`,
+        `/api/send-queue/share-targets?${params.toString()}`,
       );
       setShareTargets(result.users);
     } catch (err) {
@@ -267,11 +312,15 @@ export function SendQueueHub({
       }>('/api/send-queue/share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_user_id: target.id, ...ownerPayload }),
+        body: JSON.stringify({
+          from_identity: identitySlug === 'tommy' ? 'tommy' : 'lucas',
+          target_identity: target.id,
+          ...ownerPayload,
+        }),
       });
       setShareTargets(null);
       setMessage(
-        `Pushed ${result.transferred} to ${target.email} · you ${result.sharer_backlog} · them ${result.recipient_backlog}`,
+        `Moved ${result.transferred} to ${target.display_name} · remaining ${result.sharer_backlog} · ${target.display_name} ${result.recipient_backlog}`,
       );
     });
   }
@@ -298,9 +347,7 @@ export function SendQueueHub({
           <div>
             <div className="card__title">Send queue</div>
             <div className="card__subtitle">
-              {viewingUser
-                ? `Viewing ${viewingUser.email} · 20 emails/day · America/New_York`
-                : `${sessionEmail} · 20 emails/day · America/New_York · drag to move by day`}
+              {data?.daily_inbox_cap ?? 10} emails/day per inbox · America/New_York · drag to move by day
             </div>
           </div>
         </div>
@@ -313,22 +360,62 @@ export function SendQueueHub({
               </span>
               <span>Backlog: <strong>{backlogCount}</strong></span>
             </div>
+            <div className="send-queue-filter">
+              <span>Sender</span>
+              <div className="segmented" role="tablist">
+                {[['','All'],['lucas','Lucas'],['tommy','Tommy']].map(([value, label]) => (
+                  <button
+                    key={value || 'all'}
+                    type="button"
+                    className={identitySlug === value ? 'segmented__item segmented__item--active' : 'segmented__item'}
+                    onClick={() => {
+                      setIdentitySlug(value);
+                      setInboxEmail('');
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="send-queue-filter">
+              <span>Daily cap</span>
+              <div className="segmented" role="group">
+                {[10, 20].map((cap) => (
+                  <button
+                    key={cap}
+                    type="button"
+                    className={(data?.daily_inbox_cap ?? 10) === cap ? 'segmented__item segmented__item--active' : 'segmented__item'}
+                    disabled={busy}
+                    onClick={() => void runAction(async () => {
+                      await requestJson('/api/send-queue/settings', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ daily_inbox_cap: cap }),
+                      });
+                      setMessage(`Daily inbox cap set to ${cap}`);
+                    })}
+                  >
+                    {cap}
+                  </button>
+                ))}
+              </div>
+            </div>
             <label className="send-queue-filter">
-              <span>User</span>
+              <span>Address</span>
               <select
-                value={viewUserId}
-                onChange={(e) => onViewUserChange(e.target.value)}
+                value={inboxEmail}
+                onChange={(e) => setInboxEmail(e.target.value)}
                 className="field__input"
               >
-                <option value="">My queue ({sessionEmail})</option>
-                {otherUsers.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.email}
-                    {user.display_name && user.display_name !== user.email
-                      ? ` · ${user.display_name}`
-                      : ''}
-                  </option>
-                ))}
+                <option value="">All addresses</option>
+                {(data?.inboxes ?? [])
+                  .filter((inbox) => !identitySlug || inbox.identity_slug === identitySlug)
+                  .map((inbox) => (
+                    <option key={inbox.id} value={inbox.email}>
+                      {inbox.email} · {inbox.today_used}/{data?.daily_inbox_cap ?? 10} today
+                    </option>
+                  ))}
               </select>
             </label>
             <label className="send-queue-filter">
@@ -359,12 +446,12 @@ export function SendQueueHub({
                 {shareOpen ? (
                   <div className="send-queue-share__menu" role="menu">
                     <div className="send-queue-share__hint">
-                      Split backlog evenly with a teammate. Both queues pack to the earliest open days.
+                      Move backlog to the other sender profile. That identity’s inboxes are packed to the earliest open days.
                     </div>
                     {shareLoading || !shareTargets ? (
-                      <p className="send-queue-share__empty">Loading teammates…</p>
+                      <p className="send-queue-share__empty">Loading sender profiles…</p>
                     ) : shareTargets.length === 0 ? (
-                      <p className="send-queue-share__empty">No other users found.</p>
+                      <p className="send-queue-share__empty">No other sender profile found.</p>
                     ) : (
                       shareTargets.map((user) => (
                         <button
@@ -403,12 +490,20 @@ export function SendQueueHub({
                 className="btn btn--primary"
                 disabled={!canSendNow || busy}
                 onClick={() => void runAction(async () => {
-                  const result = await requestJson<{ sent: number }>('/api/send-queue/send-now', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ids: [...selected], ...ownerPayload }),
-                  });
-                  setMessage(`Sent ${result.sent} now`);
+                  const result = await requestJson<{ sent: number; queued?: number; failed?: number }>(
+                    '/api/send-queue/send-now',
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ ids: [...selected], ...ownerPayload }),
+                    },
+                  );
+                  const parts = [
+                    result.sent ? `Sent ${result.sent} now` : null,
+                    result.queued ? `Queued ${result.queued} — retrying when Agent Mail is back` : null,
+                    result.failed ? `${result.failed} failed` : null,
+                  ].filter(Boolean);
+                  setMessage(parts.length > 0 ? parts.join(' · ') : 'Nothing sent');
                 })}
               >
                 <Send size={14} /> Send now
@@ -458,16 +553,19 @@ export function SendQueueHub({
             </p>
           ) : null}
 
-          <div className="send-queue-board">
-            {data?.days.map((day) => (
+          <div className="send-queue-board" ref={boardRef}>
+            {data?.days.map((day) => {
+              const isPast = day.schedule_date < data.today;
+              const selectable = day.items.filter((item) => item.status === 'queued' || item.status === 'failed');
+              return (
               <div
                 key={day.schedule_date}
-                className={`send-queue-day${day.schedule_date === data.today ? ' send-queue-day--today' : ''}`}
-                onDragOver={(e) => {
+                className={`send-queue-day${day.schedule_date === data.today ? ' send-queue-day--today' : ''}${isPast ? ' send-queue-day--past' : ''}`}
+                onDragOver={isPast ? undefined : (e) => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = 'move';
                 }}
-                onDrop={(e) => void onDropDay(day.schedule_date, e)}
+                onDrop={isPast ? undefined : (e) => void onDropDay(day.schedule_date, e)}
               >
                 <div className="send-queue-day__head">
                   <div>
@@ -481,9 +579,10 @@ export function SendQueueHub({
                   <div className="send-queue-day__cap">
                     {day.used} / {day.capacity}
                     {day.sent_count > 0 ? ` · ${day.sent_count} sent` : ''}
+                    {day.over_cap ? ' · over cap' : ''}
                   </div>
                 </div>
-                {day.items.length > 0 ? (
+                {selectable.length > 0 ? (
                   <button
                     type="button"
                     className="send-queue-day__select-all"
@@ -491,18 +590,19 @@ export function SendQueueHub({
                   >
                     Select all
                   </button>
-                ) : (
-                  <p className="send-queue-day__empty">Drop here</p>
-                )}
+                ) : day.items.length === 0 ? (
+                  <p className="send-queue-day__empty">{isPast ? 'No sends' : 'Drop here'}</p>
+                ) : null}
                 <ul className="send-queue-cards">
                   {day.items.map((item) => (
                     <li
                       key={item.id}
-                      className={`send-queue-card${selected.has(item.id) ? ' send-queue-card--selected' : ''}${item.overdue ? ' send-queue-card--overdue' : ''}`}
+                      className={`send-queue-card${selected.has(item.id) ? ' send-queue-card--selected' : ''}${item.overdue ? ' send-queue-card--overdue' : ''}${item.status === 'sent' ? ' send-queue-card--sent' : ''}`}
                       draggable={item.status === 'queued' || item.status === 'failed'}
                       onDragStart={(e) => onDragStart(item, e)}
                       onDragEnd={() => setDragIds(null)}
                     >
+                      {item.status !== 'sent' ? (
                       <label className="send-queue-card__check">
                         <input
                           type="checkbox"
@@ -510,6 +610,7 @@ export function SendQueueHub({
                           onChange={() => toggleSelect(item.id)}
                         />
                       </label>
+                      ) : null}
                       <button
                         type="button"
                         className="send-queue-card__body"
@@ -520,9 +621,11 @@ export function SendQueueHub({
                         </span>
                         <span className="send-queue-card__subject">{item.subject}</span>
                         <span className="send-queue-card__meta">
+                          {item.from_email || item.inbox_email || ''}
+                          {item.from_email || item.inbox_email ? ' · ' : ''}
                           {item.campaign_name}
                           {' · '}
-                          {item.status}
+                          {queueCardStatus(item)}
                           {item.overdue ? ' · overdue' : ''}
                         </span>
                       </button>
@@ -530,7 +633,8 @@ export function SendQueueHub({
                   ))}
                 </ul>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>
@@ -568,7 +672,12 @@ export function SendQueueHub({
                 <strong>Campaign:</strong>{' '}
                 <Link href={detail.campaign_href}>{detail.item.campaign_name}</Link>
               </p>
-              {detail.item.error_message ? (
+              {detail.item.error_message && isAgentMailAccountSendingPausedError(detail.item.error_message) ? (
+                <p className="field__error">
+                  Agent Mail sending is paused. This stays queued and retries every 4 hours
+                  (next try {formatNyDateTime(detail.item.scheduled_for)}).
+                </p>
+              ) : detail.item.error_message ? (
                 <p className="field__error">{detail.item.error_message}</p>
               ) : null}
               <pre className="send-queue-detail__body">{detail.body_text ?? '(no draft body)'}</pre>

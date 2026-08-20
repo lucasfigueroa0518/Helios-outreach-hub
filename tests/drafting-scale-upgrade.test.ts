@@ -7,7 +7,11 @@ import {
   resolveAnthropicMaxInflight,
 } from '../lib/drafting/provider-admission';
 import { draftingAnthropicSnapshot } from '../lib/drafting/anthropic-semaphore';
-import { primaryFleetWorkerId } from '../lib/orchestration/fleet';
+import {
+  fallbackFleetWorkerId,
+  primaryFleetWorkerId,
+  shouldFallbackWorkerYield,
+} from '../lib/orchestration/fleet';
 import { RECONCILE_ORPHAN_FANOUT_LIMIT } from '../lib/orchestration/repository';
 import { releaseReservation } from '../lib/drafting/cost';
 
@@ -43,12 +47,33 @@ test('transient send classifier is narrow (429/5xx), not all failures', () => {
   assert.equal(isTransientSendError('Draft is no longer sendable'), false);
 });
 
-test('fleet primary id is opt-in via env', () => {
-  withEnv({ ORCHESTRATION_PRIMARY_WORKER_ID: undefined }, () => {
+test('fleet fallback id is opt-in via env', () => {
+  withEnv({
+    ORCHESTRATION_FALLBACK_WORKER_ID: undefined,
+    ORCHESTRATION_PRIMARY_WORKER_ID: undefined,
+  }, () => {
+    assert.equal(fallbackFleetWorkerId(), null);
     assert.equal(primaryFleetWorkerId(), null);
   });
-  withEnv({ ORCHESTRATION_PRIMARY_WORKER_ID: 'gcp-e2-micro-1' }, () => {
-    assert.equal(primaryFleetWorkerId(), 'gcp-e2-micro-1');
+  withEnv({
+    ORCHESTRATION_FALLBACK_WORKER_ID: 'gcp-e2-micro-1',
+    ORCHESTRATION_PRIMARY_WORKER_ID: undefined,
+  }, () => {
+    assert.equal(fallbackFleetWorkerId(), 'gcp-e2-micro-1');
+  });
+  withEnv({
+    ORCHESTRATION_FALLBACK_WORKER_ID: undefined,
+    ORCHESTRATION_PRIMARY_WORKER_ID: 'gcp-e2-micro-1',
+  }, () => {
+    assert.equal(fallbackFleetWorkerId(), 'gcp-e2-micro-1');
+  });
+});
+
+test('only the cloud fallback yields, and only while another worker is live', () => {
+  withEnv({ ORCHESTRATION_FALLBACK_WORKER_ID: 'gcp-e2-micro-1' }, () => {
+    assert.equal(shouldFallbackWorkerYield('gcp-e2-micro-1', true), true);
+    assert.equal(shouldFallbackWorkerYield('gcp-e2-micro-1', false), false);
+    assert.equal(shouldFallbackWorkerYield('Lucass-MacBook-Pro-2.local:1:abcd', true), false);
   });
 });
 

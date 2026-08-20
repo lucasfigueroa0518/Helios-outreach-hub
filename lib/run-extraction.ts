@@ -73,6 +73,8 @@ export async function extractOneUpload(runId: string, uploadId: string) {
         people_count_provisional: false,
         warnings: result.warnings,
         cache_hit: Boolean(cachedResult),
+        actual_cost_usd: cachedResult ? '0.0000' : (result.billedUsage?.costUsd ?? '0.0000'),
+        usage: cachedResult ? { pricedWith: 'cache_hit' } : (result.billedUsage ?? {}),
         result,
         progress: {
           stage: qualityFailed ? 'failed_quality' : 'complete',

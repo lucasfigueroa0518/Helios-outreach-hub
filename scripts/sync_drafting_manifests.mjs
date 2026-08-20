@@ -13,7 +13,7 @@ const hubRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.join(hubRoot, '..');
 
 const TEXT_ASSETS = [
-  { name: 'skill', file: 'first-contact-outreach-v5.md', version: 'v5.1' },
+  { name: 'skill', file: 'first-contact-outreach-v8.md', version: 'v8' },
   { name: 'subject-line', file: 'subject-line-v1.md', version: 'v1' },
   { name: 'positioning', file: 'helios-positioning-v1.md', version: 'v1', textShaKey: true },
   { name: 'capabilities', file: 'embark-capabilities-v1.json', version: 'v1' },

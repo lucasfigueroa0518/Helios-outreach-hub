@@ -5,13 +5,14 @@ set -euo pipefail
 APP_DIR=/opt/helios-worker
 SWAP_MB=2048
 NODE_MAJOR=22
+UNIT_SRC="${HELIOS_WORKER_UNIT_SRC:-/tmp/helios-worker.service}"
 
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -y
 apt-get install -y ca-certificates curl git build-essential python3
 
-# Swap (e2-micro is 1 GB RAM)
+# Swap — keep even after the RAM upgrade; drafting spikes still happen.
 if ! swapon --show | grep -q '/swapfile'; then
   if [[ ! -f /swapfile ]]; then
     fallocate -l "${SWAP_MB}M" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count="${SWAP_MB}"
@@ -33,7 +34,10 @@ fi
 mkdir -p "${APP_DIR}"
 chown -R "$(id -un)":"$(id -gn)" "${APP_DIR}" 2>/dev/null || true
 
-cat >/etc/systemd/system/helios-worker.service <<'UNIT'
+if [[ -f "${UNIT_SRC}" ]]; then
+  cp "${UNIT_SRC}" /etc/systemd/system/helios-worker.service
+else
+  cat >/etc/systemd/system/helios-worker.service <<'UNIT'
 [Unit]
 Description=Helios Outreach Hub orchestration worker
 After=network-online.target
@@ -48,13 +52,14 @@ Restart=always
 RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=120
-# Soften OOM risk on e2-micro
-MemoryMax=900M
+MemoryMax=7G
+MemoryHigh=6G
 Nice=5
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+fi
 
 systemctl daemon-reload
 systemctl enable helios-worker.service

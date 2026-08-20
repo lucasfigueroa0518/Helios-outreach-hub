@@ -1,14 +1,14 @@
 import { NextRequest } from 'next/server';
 
+import type { SenderIdentitySlug } from '@/lib/agentmail-inboxes';
 import { draftingErrorResponse, draftingJson } from '@/lib/drafting/api';
-import { resolveQueueOwnerId } from '@/lib/drafting/queue-owner';
 import {
   cancelSendQueueItems,
   formatNyDate,
   listSendQueue,
   moveSendQueueItems,
 } from '@/lib/drafting/send-queue';
-import { addCalendarDays } from '@/lib/drafting/send-queue-schedule';
+import { sendQueueBoardWindow } from '@/lib/drafting/send-queue-schedule';
 import { getSession } from '@/lib/session';
 
 export const runtime = 'nodejs';
@@ -19,22 +19,25 @@ export async function GET(request: NextRequest) {
 
   const url = request.nextUrl;
   const today = formatNyDate();
-  const from = url.searchParams.get('from') ?? today;
-  const to = url.searchParams.get('to') ?? addCalendarDays(today, 14);
+  const boardWindow = sendQueueBoardWindow(today);
+  const from = url.searchParams.get('from') ?? boardWindow.from;
+  const to = url.searchParams.get('to') ?? boardWindow.to;
   const campaignId = url.searchParams.get('campaign_id');
+  const identitySlug = url.searchParams.get('identity') as SenderIdentitySlug | null;
+  const inboxEmail = url.searchParams.get('inbox');
 
   try {
-    const ownerId = await resolveQueueOwnerId(session.userId, url.searchParams.get('user_id'));
     const result = await listSendQueue({
-      ownerId,
+      ownerId: session.userId,
       from,
       to,
       campaignId,
+      identitySlug: identitySlug === 'lucas' || identitySlug === 'tommy' ? identitySlug : null,
+      inboxEmail,
     });
     return draftingJson({
       ...result,
-      owner_id: ownerId,
-      viewing_other: ownerId !== session.userId,
+      owner_id: session.userId,
     });
   } catch (error) {
     return draftingErrorResponse(error);
@@ -60,9 +63,8 @@ export async function PATCH(request: NextRequest) {
   }
 
   try {
-    const ownerId = await resolveQueueOwnerId(session.userId, body.user_id);
     const result = await moveSendQueueItems({
-      ownerId,
+      ownerId: session.userId,
       ids: body.ids,
       targetDate: body.target_date,
     });
@@ -88,9 +90,8 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    const ownerId = await resolveQueueOwnerId(session.userId, body.user_id);
     const result = await cancelSendQueueItems({
-      ownerId,
+      ownerId: session.userId,
       ids: body.ids,
     });
     return draftingJson(result);

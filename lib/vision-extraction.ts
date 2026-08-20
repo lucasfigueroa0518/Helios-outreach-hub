@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ImageTile } from '@/lib/image-tiling';
 import type { ExtractedPerson, ExtractionResult } from '@/lib/extraction';
+import { cachedSystemText, withToolCache } from '@/lib/anthropic-cache';
+import { AnthropicUsageCollector } from '@/lib/anthropic-pricing';
 import { assertLiveExtractionAllowed, EXTRACTION_MODEL } from '@/lib/models';
 import { normalizeName } from '@/lib/name-standard';
 
@@ -30,7 +32,7 @@ how many distinct person entries (rows/cards/list items showing an
 individual person) are FULLY or PARTIALLY visible. Do not list them. Reply
 with a tool call only.`;
 
-function extractPrompt(count: number) {
+function extractPrompt() {
   return `Transcribe every person entry visible in this screenshot into structured
 rows. Rules:
 - One entry per distinct person, top to bottom (left-to-right first if grid).
@@ -41,9 +43,11 @@ rows. Rules:
 - If any text is too blurry/small to read with certainty, omit that field
   and set confidence="low" for that person.
 - Include a LinkedIn profile URL only if visible. Do NOT record connection
-  degree (1st/2nd/3rd) — we do not store it.
-- Expected entry count from a prior pass: ${count}. If you see a different
-  number, extract what you actually see — do not pad or trim to match.`;
+  degree (1st/2nd/3rd) — we do not store it.`;
+}
+
+function extractCountHint(count: number) {
+  return `Expected entry count from a prior pass: ${count}. If you see a different number, extract what you actually see — do not pad or trim to match.`;
 }
 
 const reportCountTool: Anthropic.Tool = {
@@ -142,7 +146,7 @@ function toolInput<T>(message: Anthropic.Message, toolName: string): T | null {
   return (block?.input as T) ?? null;
 }
 
-export function createLiveVisionCaller(): VisionCaller {
+export function createLiveVisionCaller(collector?: AnthropicUsageCollector): VisionCaller {
   assertLiveExtractionAllowed();
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured');
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 });
@@ -152,16 +156,17 @@ export function createLiveVisionCaller(): VisionCaller {
       const message = await callWithRetry(() => client.messages.create({
         model: EXTRACTION_MODEL,
         max_tokens: 200,
+        system: cachedSystemText(COUNT_PROMPT),
         messages: [{
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: tile.mediaType, data: tile.bytes.toString('base64') } },
-            { type: 'text', text: COUNT_PROMPT },
           ],
         }],
-        tools: [reportCountTool],
+        tools: [withToolCache(reportCountTool)],
         tool_choice: { type: 'tool', name: 'report_count' },
       }));
+      collector?.record(message);
       const result = toolInput<{ count: number; layout: ImageLayout }>(message, 'report_count');
       if (!result) throw new Error('Vision count pass finished without report_count output');
       return result;
@@ -170,16 +175,18 @@ export function createLiveVisionCaller(): VisionCaller {
       const message = await callWithRetry(() => client.messages.create({
         model: EXTRACTION_MODEL,
         max_tokens: expectedCount * 120 + 500,
+        system: cachedSystemText(extractPrompt()),
         messages: [{
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: tile.mediaType, data: tile.bytes.toString('base64') } },
-            { type: 'text', text: extractPrompt(expectedCount) },
+            { type: 'text', text: extractCountHint(expectedCount) },
           ],
         }],
-        tools: [extractPeopleTool],
+        tools: [withToolCache(extractPeopleTool)],
         tool_choice: { type: 'tool', name: 'extract_people' },
       }));
+      collector?.record(message);
       const result = toolInput<{ people: RawExtractedPerson[] }>(message, 'extract_people');
       if (!result) throw new Error('Vision extract pass finished without extract_people output');
       return result;

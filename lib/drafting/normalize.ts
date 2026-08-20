@@ -196,3 +196,104 @@ export function inputFingerprint(
 export function normalizeDraftText(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
+
+const GREETING_PREFIX = '(?:(?:Hi|Hello|Hey|Dear)\\s+)?';
+const GREETING_NAME = '[A-Z][A-Za-z][A-Za-z.\'’\\-]{0,28}';
+const GREETING_STOPWORDS = new Set([
+  'however', 'therefore', 'moreover', 'furthermore', 'unfortunately',
+  'recently', 'given', 'still', 'also', 'well', 'yes', 'no', 'please',
+  'thanks', 'thank', 'actually', 'finally', 'similarly', 'instead',
+  'meanwhile', 'anyway', 'so',
+]);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function greetingOpenPattern(firstName?: string | null): string {
+  if (firstName?.trim()) {
+    return `(?:(?:Hi|Hello|Hey|Dear)\\s+)?${escapeRegExp(firstName.trim())}`;
+  }
+  return `${GREETING_PREFIX}${GREETING_NAME}`;
+}
+
+function greetingToken(open: string): string {
+  return open.replace(/^(?:Hi|Hello|Hey|Dear)\s+/i, '').trim().toLowerCase();
+}
+
+function isGreetingOpen(open: string, firstName?: string | null): boolean {
+  if (firstName?.trim()) return true;
+  return !GREETING_STOPWORDS.has(greetingToken(open));
+}
+
+/** First character of the opening body paragraph after "[Name],\n\n" must be uppercase. */
+function capitalizeBodyAfterGreeting(body: string): string {
+  const match = body.match(/^(.+?,\n\n)([\s\S]*)$/);
+  if (!match) return body;
+  const [, prefix, rest] = match;
+  if (!rest.trim()) return body;
+  const lead = rest.match(/^(\s*)(\S)/);
+  if (!lead) return body;
+  const [, ws, first] = lead;
+  if (first === first.toUpperCase() && first !== first.toLowerCase()) return body;
+  const idx = ws.length;
+  return `${prefix}${rest.slice(0, idx)}${first.toUpperCase()}${rest.slice(idx + 1)}`;
+}
+
+export function hasLowercaseGreetingBodyOpen(body: string, firstName?: string | null): boolean {
+  const text = normalizeDraftText(body);
+  const flags = firstName?.trim() ? 'i' : '';
+  const open = greetingOpenPattern(firstName);
+  const match = text.match(new RegExp(`^(${open}),\\n\\n(\\S)`, flags));
+  if (!match || !isGreetingOpen(match[1], firstName)) return false;
+  const first = match[2];
+  return first === first.toLowerCase() && first !== first.toUpperCase();
+}
+
+/** True when the email opens with "Name, rest of sentence" on one line. */
+export function hasSameLineGreeting(body: string, firstName?: string | null): boolean {
+  const text = normalizeDraftText(body);
+  const match = text.match(new RegExp(
+    `^(${greetingOpenPattern(firstName)}),[ \\t]+\\S`,
+    firstName?.trim() ? 'i' : '',
+  ));
+  return Boolean(match && isGreetingOpen(match[1], firstName));
+}
+
+/**
+ * Hard rule: the opening "[First name]," sits on its own line, then a blank
+ * line, then the first sentence. Never "Blane, your work…".
+ */
+export function ensureGreetingLineBreak(
+  body: string,
+  firstName?: string | null,
+): string {
+  const text = normalizeDraftText(body);
+  if (!text.trim()) return text;
+  const flags = firstName?.trim() ? 'i' : '';
+  const open = greetingOpenPattern(firstName);
+
+  const sameLine = text.match(new RegExp(`^(${open}),[ \\t]+(?=\\S)`, flags));
+  if (sameLine && isGreetingOpen(sameLine[1], firstName)) {
+    return capitalizeBodyAfterGreeting(`${sameLine[1]},\n\n${text.slice(sameLine[0].length)}`);
+  }
+
+  const oneBreak = text.match(new RegExp(`^(${open}),\\n(?!\\n)`, flags));
+  if (oneBreak && isGreetingOpen(oneBreak[1], firstName)) {
+    return capitalizeBodyAfterGreeting(`${oneBreak[1]},\n\n${text.slice(oneBreak[0].length)}`);
+  }
+
+  const greetingOnly = text.match(new RegExp(`^(${open}),\\n\\n`, flags));
+  if (greetingOnly && isGreetingOpen(greetingOnly[1], firstName)) {
+    return capitalizeBodyAfterGreeting(text);
+  }
+  return text;
+}
+
+/** Line-ending + greeting-break normalize for email bodies (never subjects). */
+export function normalizeDraftBody(
+  value: string,
+  firstName?: string | null,
+): string {
+  return ensureGreetingLineBreak(normalizeDraftText(value), firstName);
+}

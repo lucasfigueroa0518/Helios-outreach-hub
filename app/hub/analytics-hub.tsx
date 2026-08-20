@@ -2,19 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Filter, X, Plus, ChevronRight, ChevronDown, DollarSign, Send, CheckCircle2,
-  Eye, MousePointer, MessageSquare, Tag, User as UserIcon, Check,
+  Filter, ChevronRight, ChevronDown, DollarSign, Send, Tag, Check,
 } from 'lucide-react';
 import { TagBadge } from '@/app/components/tag-badge';
 import { TagInputPopover } from '@/app/components/tag-input-popover';
 import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
 import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { requestJson } from '@/lib/client-request';
-import { AnalyticsSummary, AnalyticsCampaignRow } from '@/lib/analytics';
+import { AnalyticsSummary } from '@/lib/analytics';
 import { AnalyticsDrilldownDrawer } from '@/app/hub/analytics-drilldown-drawer';
 
 type Period = 'week' | 'month' | 'custom';
-type ViewMode = 'campaigns' | 'per_user';
+type ViewMode = 'campaigns' | 'per_sender';
 
 type RunRow = {
   id: string;
@@ -46,8 +45,11 @@ export function AnalyticsHub() {
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>('');
+  const [selectedIdentitySlug, setSelectedIdentitySlug] = useState<string>('');
+  const [selectedFromEmail, setSelectedFromEmail] = useState<string>('');
 
   const [viewMode, setViewMode] = useState<ViewMode>('campaigns');
+  const [expandedIdentity, setExpandedIdentity] = useState<string | null>(null);
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [selectedExclusions, setSelectedExclusions] = useState<Set<string>>(new Set());
@@ -69,6 +71,8 @@ export function AnalyticsHub() {
     (selectedCampaignIds.length ? 1 : 0) +
     (selectedTags.length ? 1 : 0) +
     (selectedUserId ? 1 : 0) +
+    (selectedIdentitySlug ? 1 : 0) +
+    (selectedFromEmail ? 1 : 0) +
     (period === 'custom' ? 1 : 0);
 
   async function loadSummary() {
@@ -89,6 +93,8 @@ export function AnalyticsHub() {
       if (selectedUserId) {
         params.set('userId', selectedUserId);
       }
+      if (selectedIdentitySlug) params.set('identitySlug', selectedIdentitySlug);
+      if (selectedFromEmail) params.set('fromEmail', selectedFromEmail);
 
       const summaryData = await hubGetJson<AnalyticsSummary>(
         `/api/analytics/summary?${params.toString()}`,
@@ -105,7 +111,7 @@ export function AnalyticsHub() {
   useEffect(() => {
     void loadSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period, customFrom, customTo, selectedCampaignIds, selectedTags, selectedUserId]);
+  }, [period, customFrom, customTo, selectedCampaignIds, selectedTags, selectedUserId, selectedIdentitySlug, selectedFromEmail]);
 
   // Load runs after the summary settles so we don't open two heavy queries
   // at once against the session pooler.
@@ -253,12 +259,6 @@ export function AnalyticsHub() {
     return `${selectedCampaignIds.length} campaigns`;
   }, [selectedCampaignIds, summary?.available_campaigns]);
 
-  const userTriggerLabel = useMemo(() => {
-    if (!selectedUserId) return 'All users';
-    const match = summary?.available_users?.find((u) => u.id === selectedUserId);
-    return match?.name || match?.email || 'Selected user';
-  }, [selectedUserId, summary?.available_users]);
-
   if (loading && !summary) {
     return <HubLoadingSpinner label="Loading analytics" />;
   }
@@ -339,31 +339,50 @@ export function AnalyticsHub() {
                 </div>
               )}
 
-              {/* User Filter */}
-              {summary?.available_users?.length ? (
-                <label className="analytics-filter">
-                  <span className="analytics-filter__label">User Owner</span>
-                  <span className={`analytics-filter__shell${selectedUserId ? ' analytics-filter__shell--active' : ''}`}>
-                    <select
-                      className="analytics-filter__select"
-                      value={selectedUserId}
-                      onChange={(e) => setSelectedUserId(e.target.value)}
-                      aria-label="User owner"
-                    >
-                      <option value="">All users</option>
-                      {summary.available_users.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.name || u.email}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="analytics-filter__value" aria-hidden="true">
-                      {userTriggerLabel}
-                    </span>
-                    <ChevronDown size={14} className="analytics-filter__chevron" aria-hidden="true" />
+              <label className="analytics-filter">
+                <span className="analytics-filter__label">Sender profile</span>
+                <span className={`analytics-filter__shell${selectedIdentitySlug ? ' analytics-filter__shell--active' : ''}`}>
+                  <select
+                    className="analytics-filter__select"
+                    value={selectedIdentitySlug}
+                    onChange={(e) => {
+                      setSelectedIdentitySlug(e.target.value);
+                      setSelectedFromEmail('');
+                    }}
+                    aria-label="Sender profile"
+                  >
+                    <option value="">All profiles</option>
+                    <option value="lucas">Lucas Figueroa</option>
+                    <option value="tommy">Thomas Pozo</option>
+                  </select>
+                  <span className="analytics-filter__value" aria-hidden="true">
+                    {selectedIdentitySlug === 'lucas' ? 'Lucas Figueroa' : selectedIdentitySlug === 'tommy' ? 'Thomas Pozo' : 'All profiles'}
                   </span>
-                </label>
-              ) : null}
+                  <ChevronDown size={14} className="analytics-filter__chevron" aria-hidden="true" />
+                </span>
+              </label>
+              <label className="analytics-filter">
+                <span className="analytics-filter__label">From address</span>
+                <span className={`analytics-filter__shell${selectedFromEmail ? ' analytics-filter__shell--active' : ''}`}>
+                  <select
+                    className="analytics-filter__select"
+                    value={selectedFromEmail}
+                    onChange={(e) => setSelectedFromEmail(e.target.value)}
+                    aria-label="From address"
+                  >
+                    <option value="">All addresses</option>
+                    {(summary?.available_inboxes ?? [])
+                      .filter((inbox) => !selectedIdentitySlug || inbox.identity_slug === selectedIdentitySlug)
+                      .map((inbox) => (
+                        <option key={inbox.email} value={inbox.email}>{inbox.email}</option>
+                      ))}
+                  </select>
+                  <span className="analytics-filter__value" aria-hidden="true">
+                    {selectedFromEmail || 'All addresses'}
+                  </span>
+                  <ChevronDown size={14} className="analytics-filter__chevron" aria-hidden="true" />
+                </span>
+              </label>
 
               {/* Campaign Multiselect Filter */}
               {summary?.available_campaigns?.length ? (
@@ -454,6 +473,31 @@ export function AnalyticsHub() {
 
                 <div className="analytics-hub__stats" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                   <DrillableTile
+                    label="Anthropic billed"
+                    value={formatUsd(summary?.anthropic_spend.billed_usd)}
+                    sub={
+                      summary?.anthropic_spend.billed_from_day
+                        ? `Complete UTC days ${summary.anthropic_spend.billed_from_day} → ${summary.anthropic_spend.billed_to_day}`
+                        : 'No complete UTC days in this window'
+                    }
+                    metricKey="anthropic_billed"
+                    onClick={() => setDrilldownMetricKey('anthropic_billed')}
+                  />
+                  <DrillableTile
+                    label="Hub attributed"
+                    value={formatUsd(summary?.anthropic_spend.attributed_usd ?? metrics.total_spend_usd)}
+                    sub="Work-row UNION (not GCP)"
+                    metricKey="hub_attributed"
+                    onClick={() => setDrilldownMetricKey('hub_attributed')}
+                  />
+                  <DrillableTile
+                    label="Variance"
+                    value={formatUsd(summary?.anthropic_spend.variance_usd)}
+                    sub="Billed − attributed"
+                    metricKey="spend_variance"
+                    onClick={() => setDrilldownMetricKey('spend_variance')}
+                  />
+                  <DrillableTile
                     label="Spend per lead"
                     value={formatUsd(metrics.spend_per_lead_usd)}
                     sub={`Across ${metrics.total_leads} leads`}
@@ -470,7 +514,7 @@ export function AnalyticsHub() {
                   <DrillableTile
                     label="Per enrichment"
                     value={formatUsd(metrics.cost_per_enrichment_usd)}
-                    sub={`${metrics.enrichment_lead_events} enrichment events`}
+                    sub={`${metrics.enrichment_lead_events} research jobs`}
                     metricKey="cost_per_enrichment"
                     onClick={() => setDrilldownMetricKey('cost_per_enrichment')}
                   />
@@ -484,14 +528,14 @@ export function AnalyticsHub() {
                   <DrillableTile
                     label="Aggregated enrichment"
                     value={formatUsd(metrics.enrichment_cost_usd)}
-                    sub="Total web research cost"
+                    sub="Company research jobs"
                     metricKey="aggregated_enrichment"
                     onClick={() => setDrilldownMetricKey('aggregated_enrichment')}
                   />
                   <DrillableTile
                     label="Total spend"
                     value={formatUsd(metrics.total_spend_usd)}
-                    sub="Combined actuals"
+                    sub="Attributed Claude (not GCP)"
                     metricKey="total_spend"
                     onClick={() => setDrilldownMetricKey('total_spend')}
                   />
@@ -531,46 +575,32 @@ export function AnalyticsHub() {
 
                 <div className="analytics-hub__stats" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                   <DrillableTile
-                    label="Delivery rate"
-                    value={formatPct(metrics.delivery_rate)}
-                    sub={`${metrics.emails_delivered} delivered`}
-                    metricKey="delivery_rate"
-                    onClick={() => setDrilldownMetricKey('delivery_rate')}
-                  />
-                  <DrillableTile
-                    label="Open rate"
-                    value={formatPct(metrics.open_rate)}
-                    sub={`${metrics.emails_opened} opens`}
-                    metricKey="open_rate"
-                    onClick={() => setDrilldownMetricKey('open_rate')}
-                  />
-                  <DrillableTile
-                    label="Click rate"
-                    value={formatPct(metrics.click_rate)}
-                    sub={`${metrics.emails_clicked} clicks`}
-                    metricKey="click_rate"
-                    onClick={() => setDrilldownMetricKey('click_rate')}
-                  />
-                  <DrillableTile
-                    label="Reply rate"
-                    value={formatPct(metrics.reply_rate)}
-                    sub={`${metrics.emails_replied} replies`}
-                    metricKey="reply_rate"
-                    onClick={() => setDrilldownMetricKey('reply_rate')}
-                  />
-                  <DrillableTile
                     label="Emails sent"
                     value={String(metrics.emails_sent)}
-                    sub="Total outbound sends"
+                    sub="Agent Mail outreach"
                     metricKey="emails_sent"
                     onClick={() => setDrilldownMetricKey('emails_sent')}
                   />
                   <DrillableTile
-                    label="Campaigns done"
-                    value={String(metrics.campaigns_count)}
-                    sub="Matching campaigns"
-                    metricKey="campaigns_count"
-                    onClick={() => setDrilldownMetricKey('campaigns_count')}
+                    label="Delivered"
+                    value={String(metrics.emails_delivered)}
+                    sub={formatPct(metrics.delivery_rate) === '—' ? 'Delivery rate' : `${formatPct(metrics.delivery_rate)} delivery`}
+                    metricKey="delivery_rate"
+                    onClick={() => setDrilldownMetricKey('delivery_rate')}
+                  />
+                  <DrillableTile
+                    label="Bounced"
+                    value={String(metrics.emails_bounced)}
+                    sub={formatPct(metrics.bounce_rate) === '—' ? 'Bounce rate' : `${formatPct(metrics.bounce_rate)} bounce`}
+                    metricKey="emails_bounced"
+                    onClick={() => setDrilldownMetricKey('emails_bounced')}
+                  />
+                  <DrillableTile
+                    label="Replied"
+                    value={String(metrics.emails_replied)}
+                    sub={formatPct(metrics.reply_rate) === '—' ? 'Reply rate' : `${formatPct(metrics.reply_rate)} reply`}
+                    metricKey="reply_rate"
+                    onClick={() => setDrilldownMetricKey('reply_rate')}
                   />
                 </div>
               </section>
@@ -579,7 +609,7 @@ export function AnalyticsHub() {
               <section style={{ marginBottom: 'var(--space-6)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-3)' }}>
                   <h3 style={{ fontSize: 'var(--font-size-md)', fontWeight: 'bold', margin: 0 }}>
-                    {viewMode === 'campaigns' ? 'Campaign Performance Matrix' : 'Per-User Performance'}
+                    {viewMode === 'campaigns' ? 'Campaign Performance Matrix' : 'Sender Performance'}
                   </h3>
                   <div className="segmented">
                     <button
@@ -591,10 +621,10 @@ export function AnalyticsHub() {
                     </button>
                     <button
                       type="button"
-                      className={viewMode === 'per_user' ? 'segmented__item segmented__item--active' : 'segmented__item'}
-                      onClick={() => setViewMode('per_user')}
+                      className={viewMode === 'per_sender' ? 'segmented__item segmented__item--active' : 'segmented__item'}
+                      onClick={() => setViewMode('per_sender')}
                     >
-                      By User
+                      By Sender
                     </button>
                   </div>
                 </div>
@@ -610,8 +640,7 @@ export function AnalyticsHub() {
                           <th>Leads</th>
                           <th>Sent</th>
                           <th>Delivery %</th>
-                          <th>Open %</th>
-                          <th>Click %</th>
+                          <th>Bounce %</th>
                           <th>Reply %</th>
                           <th>Spend / Lead</th>
                           <th>Total Spend</th>
@@ -620,7 +649,7 @@ export function AnalyticsHub() {
                       <tbody>
                         {summary.by_campaign.length === 0 && (
                           <tr>
-                            <td colSpan={11} className="text-muted">No campaigns matched current filter criteria.</td>
+                            <td colSpan={10} className="text-muted">No campaigns matched current filter criteria.</td>
                           </tr>
                         )}
                         {summary.by_campaign.map((row) => (
@@ -674,8 +703,7 @@ export function AnalyticsHub() {
                             <td>{row.lead_count}</td>
                             <td>{row.emails_sent}</td>
                             <td>{formatPct(row.delivery_rate)}</td>
-                            <td>{formatPct(row.open_rate)}</td>
-                            <td>{formatPct(row.click_rate)}</td>
+                            <td>{formatPct(row.bounce_rate)}</td>
                             <td>{formatPct(row.reply_rate)}</td>
                             <td>{formatUsd(row.spend_per_lead_usd)}</td>
                             <td style={{ fontWeight: 'bold' }}>{formatUsd(row.total_spend_usd)}</td>
@@ -686,41 +714,58 @@ export function AnalyticsHub() {
                   </div>
                 )}
 
-                {viewMode === 'per_user' && summary && (
+                {viewMode === 'per_sender' && summary && (
                   <div className="table-wrap">
                     <table className="data-table">
                       <thead>
                         <tr>
-                          <th>User</th>
+                          <th>Sender</th>
                           <th>Sent</th>
                           <th>Delivered</th>
-                          <th>Opened</th>
-                          <th>Clicked</th>
+                          <th>Bounced</th>
                           <th>Replied</th>
                           <th>$/email</th>
-                          <th>$/enrich</th>
-                          <th>$/draft</th>
                           <th>Total Spend</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {summary.by_user.length === 0 && (
-                          <tr><td colSpan={10}>No per-user activity in this window.</td></tr>
+                        {(summary.by_identity ?? []).length === 0 && (
+                          <tr><td colSpan={7}>No sender activity in this window.</td></tr>
                         )}
-                        {summary.by_user.map((row) => (
-                          <tr key={row.user_id}>
-                            <td><strong>{row.user_name ?? row.user_email ?? row.user_id}</strong></td>
-                            <td>{row.emails_sent}</td>
-                            <td>{row.emails_delivered}</td>
-                            <td>{row.emails_opened}</td>
-                            <td>{row.emails_clicked}</td>
-                            <td>{row.emails_replied}</td>
-                            <td>{formatUsd(row.cost_per_email_usd)}</td>
-                            <td>{formatUsd(row.cost_per_enrichment_usd)}</td>
-                            <td>{formatUsd(row.cost_per_drafting_usd)}</td>
-                            <td style={{ fontWeight: 'bold' }}>{formatUsd(row.total_spend_usd)}</td>
-                          </tr>
-                        ))}
+                        {(summary.by_identity ?? []).flatMap((row) => {
+                          const open = expandedIdentity === row.identity_slug;
+                          return [
+                            <tr
+                              key={row.identity_slug}
+                              style={{ cursor: 'pointer' }}
+                              onClick={() => setExpandedIdentity(open ? null : row.identity_slug)}
+                            >
+                              <td>
+                                <strong>{row.display_name}</strong>
+                                <span className="text-muted" style={{ marginLeft: 8, fontSize: 'var(--font-size-xs)' }}>
+                                  {open ? 'Hide inboxes' : `${row.inboxes.length} inbox${row.inboxes.length === 1 ? '' : 'es'}`}
+                                </span>
+                              </td>
+                              <td>{row.emails_sent}</td>
+                              <td>{row.emails_delivered}</td>
+                              <td>{row.emails_bounced}</td>
+                              <td>{row.emails_replied}</td>
+                              <td>{formatUsd(row.cost_per_email_usd)}</td>
+                              <td style={{ fontWeight: 'bold' }}>{formatUsd(row.total_spend_usd)}</td>
+                            </tr>,
+                            ...(open ? row.inboxes.map((inbox) => (
+                              <tr key={`${row.identity_slug}-${inbox.from_email}`}>
+                                <td style={{ paddingLeft: 24 }}>{inbox.from_email}</td>
+                                <td>{inbox.emails_sent}</td>
+                                <td>{inbox.emails_delivered}</td>
+                                <td>{inbox.emails_bounced}</td>
+                                <td>{inbox.emails_replied}</td>
+                                <td>{formatUsd(inbox.cost_per_email_usd)}</td>
+                                <td>{formatUsd(inbox.total_spend_usd)}</td>
+                              </tr>
+                            )) : []),
+                          ];
+                        })}
                       </tbody>
                     </table>
                   </div>

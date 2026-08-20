@@ -27,9 +27,13 @@ export const DRAFTING_REQUIRED_TABLES = [
   'outreach.email_drafts',
   'outreach.email_sends',
   'outreach.email_send_queue',
+  'outreach.sender_identities',
+  'outreach.sender_inboxes',
+  'outreach.org_settings',
   'outreach.billing_guard',
   'outreach.drafting_job_cost_events',
   'outreach.drafting_run_cost_opening_balances',
+  'outreach.anthropic_cost_report_days',
 ] as const;
 
 /** Columns referenced by repository/jobs paths that are added incrementally. */
@@ -100,6 +104,31 @@ export const DRAFTING_REQUIRED_COLUMNS: DraftingSchemaColumn[] = [
     reason: 'Link queue rows to email.send orch jobs',
   },
   {
+    table: 'outreach.email_send_queue',
+    column: 'sender_inbox_id',
+    reason: 'Per-inbox daily cap and Agent Mail From routing',
+  },
+  {
+    table: 'outreach.email_send_queue',
+    column: 'from_email',
+    reason: 'Allocated outreach inbox at enqueue time',
+  },
+  {
+    table: 'outreach.email_sends',
+    column: 'sender_inbox_id',
+    reason: 'Analytics and reply routing by Agent Mail inbox',
+  },
+  {
+    table: 'outreach.email_sends',
+    column: 'provider_thread_id',
+    reason: 'Agent Mail thread matching for inbound replies',
+  },
+  {
+    table: 'outreach.org_settings',
+    column: 'value',
+    reason: 'Org daily inbox cap (10 or 20)',
+  },
+  {
     table: 'outreach.billing_guard',
     column: 'cost_amount',
     reason: 'Track GCP cloud worker spend for Analytics Hub',
@@ -113,6 +142,26 @@ export const DRAFTING_REQUIRED_COLUMNS: DraftingSchemaColumn[] = [
     table: 'outreach.sender_profiles',
     column: 'headshot_storage_path',
     reason: 'HTML email signature headshot (png/jpeg in Storage)',
+  },
+  {
+    table: 'outreach.reply_sends',
+    column: 'actual_cost_usd',
+    reason: 'Anthropic reply-draft spend on the work row',
+  },
+  {
+    table: 'outreach.reply_sends',
+    column: 'usage',
+    reason: 'Anthropic token buckets for reply drafts',
+  },
+  {
+    table: 'dashboards.context_updates',
+    column: 'actual_cost_usd',
+    reason: 'Anthropic dashboard summary spend',
+  },
+  {
+    table: 'dashboards.context_updates',
+    column: 'usage',
+    reason: 'Anthropic token buckets for dashboard summaries',
   },
 ];
 
