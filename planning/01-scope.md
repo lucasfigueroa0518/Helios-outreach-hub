@@ -49,10 +49,11 @@ An enriched lead-sheet generator:
   implementation.
 - **Salesforce writeback** — leads are NOT pushed into Salesforce; they live
   in our database with Outreach IDs.
-- **Paid enrichment APIs** (Hunter.io, Prospeo, NeverBounce, Apollo) — v1
-  uses Embark DB + web search only. The pipeline is designed so a paid
-  verification API can be slotted in later as an additional email source /
-  verifier without restructuring (see 03).
+- **Paid enrichment APIs** (Hunter.io, Prospeo, NeverBounce) — Hub enrichment
+  stays Embark DB + web search. Apollo is **not** a Hub enrichment source.
+  Auto campaigns may people-search Apollo (free) and keep enriching never-seen
+  `apollo_person_id`s until `emails_per_day` verified emails are attached;
+  that is list sourcing, not the enrichment waterfall. Never re-enrich a stored ID.
 - **Editing the sheet in-app** — the Review viewer is read-only; users export,
   edit locally, and re-upload (Upload & Replace).
 

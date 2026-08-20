@@ -9,6 +9,11 @@ import {
   sortDraftRows,
   type DraftSortMode,
 } from '@/lib/drafting/draft-review-order';
+import {
+  outreachFocusLabel,
+  rowMatchesOutreachFocus,
+  type OutreachCarouselFocus,
+} from '@/lib/auto-campaigns/outreach-insight';
 import { formatNyDateLabel } from '@/lib/drafting/send-queue-schedule';
 
 function statusChipLabel(
@@ -64,8 +69,10 @@ const APPROVE_TOTAL_MS = 360;
 
 export function EmailReview({
   campaignId,
+  autoMode = false,
   rows,
   sortMode,
+  focus = null,
   currentItemId,
   sender,
   sends,
@@ -80,8 +87,10 @@ export function EmailReview({
   onDecision,
 }: {
   campaignId: string;
+  autoMode?: boolean;
   rows: DraftingItemRow[];
   sortMode: DraftSortMode;
+  focus?: OutreachCarouselFocus | null;
   currentItemId: string | null;
   sender: SenderProfile | null;
   sends: {
@@ -104,7 +113,7 @@ export function EmailReview({
   onDecision: () => void;
 }) {
   const reviewable = sortDraftRows(
-    rows.filter((row) => row.draft && !['removed', 'waiting_for_enrichment'].includes(row.state)),
+    rows.filter((row) => rowMatchesOutreachFocus(row, focus)),
     sortMode,
   );
   const currentIndex = reviewable.findIndex((row) => row.id === currentItemId);
@@ -738,8 +747,12 @@ export function EmailReview({
   if (!draftCount) {
     return (
       <div className="empty-state drafting-email-empty">
-        <strong>No drafts ready yet</strong>
-        <span>Researching leads. The first draft will appear here as soon as it is ready.</span>
+        <strong>{focus ? `No emails in “${outreachFocusLabel(focus)}”` : 'No drafts ready yet'}</strong>
+        <span>
+          {focus
+            ? 'Click the tile again to show every draft.'
+            : 'Researching leads. The first draft will appear here as soon as it is ready.'}
+        </span>
       </div>
     );
   }
@@ -981,7 +994,9 @@ export function EmailReview({
         ) : null}
         {retrySuggested && decidable ? (
           <p className="drafting-retry-hint">
-            Soft lint remains (e.g. stacked clauses). Download if the note is fine, or hit retry to regenerate.
+            {autoMode
+              ? 'Retry suggested — this draft was not auto-queued. Click Retry to send it.'
+              : 'Soft lint remains (e.g. stacked clauses). Download if the note is fine, or hit retry to regenerate.'}
           </p>
         ) : null}
         {rewriting ? (
@@ -1046,7 +1061,17 @@ export function EmailReview({
                   <X size={16} />
                 </button>
               </>
-            ) : (
+            ) : autoMode && retrySuggested ? (
+              <button
+                type="button"
+                className="btn btn--secondary"
+                aria-label="Retry suggested draft"
+                disabled={!sends.configured || sendFlash}
+                onClick={sendCurrentDraft}
+              >
+                Retry
+              </button>
+            ) : autoMode ? null : (
               <button
                 type="button"
                 className="drafting-icon-btn drafting-icon-btn--send"
@@ -1060,6 +1085,7 @@ export function EmailReview({
               </button>
             )}
           </div>
+          {autoMode ? null : (
           <div className="drafting-send-all">
             <button
               type="button"
@@ -1087,6 +1113,7 @@ export function EmailReview({
               </p>
             ) : null}
           </div>
+          )}
         </div>
         {showFeedback ? (
           <div

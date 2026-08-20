@@ -1,24 +1,20 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
-import { CampaignUploads } from '@/app/campaigns/[id]/campaign-uploads';
 import { CampaignTagsHeader } from '@/app/campaigns/[id]/campaign-tags-header';
-import { campaignHasDraftingWorkspace, campaignHasReviewableData } from '@/lib/campaign-review';
+import { CampaignTitle } from '@/app/campaigns/[id]/campaign-title';
+import { ProspectWorkspace } from '@/app/campaigns/[id]/prospect/prospect-workspace';
 import { getCampaign } from '@/lib/campaigns';
 import { displayNameFromEmail, getSession } from '@/lib/session';
 
-export default async function CampaignPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ProspectPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   if (!session) redirect('/');
 
   const { id } = await params;
   const campaign = await getCampaign(session.userId, id);
   if (!campaign) notFound();
-  if (campaign.kind === 'auto') redirect(`/campaigns/${id}/prospect`);
-  const [reviewEnabled, draftEnabled] = await Promise.all([
-    campaign.needs_enrichment ? campaignHasReviewableData(id) : Promise.resolve(false),
-    campaignHasDraftingWorkspace(id),
-  ]);
+  if (campaign.kind !== 'auto') redirect(`/campaigns/${id}`);
 
   return (
     <main className="app-shell">
@@ -26,17 +22,17 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
         <div className="card__header">
           <div>
             <Link href="/hub" className="back-link"><ArrowLeft size={14} /> Outreach Hub</Link>
-            <div className="card__title">{campaign.name}</div>
-            <div className="card__subtitle">{campaign.lead_count} leads · {campaign.status}</div>
+            <CampaignTitle
+              name={campaign.name}
+              senderIdentitySlug={campaign.sender_identity_slug}
+            />
+            <div className="card__subtitle">{campaign.lead_count} leads · Auto</div>
             <CampaignTagsHeader campaignId={campaign.id} initialTags={campaign.tags} initialTagDetails={campaign.tag_details} />
           </div>
         </div>
         <div className="card__body">
-          <CampaignUploads
-            campaignId={campaign.id}
-            needsEnrichment={campaign.needs_enrichment}
-            reviewEnabledInitial={reviewEnabled}
-            draftEnabledInitial={draftEnabled}
+          <ProspectWorkspace
+            campaignId={id}
             defaultDisplayName={displayNameFromEmail(session.email)}
             defaultWorkEmail={session.email}
           />

@@ -83,6 +83,24 @@ function nyParts(date: Date): { dateStr: string; hour: number; minute: number } 
   };
 }
 
+/** User-facing weekday like "Thu" for a YYYY-MM-DD NY calendar date. */
+export function formatNyWeekday(dateStr: string): string {
+  const utc = nyWallTimeToUtc(dateStr, 12, 0);
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    timeZone: SEND_QUEUE_TIMEZONE,
+  }).format(utc);
+}
+
+export function isNyCalendarWeekend(dateStr: string): boolean {
+  const utc = nyWallTimeToUtc(dateStr, 12, 0);
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    timeZone: SEND_QUEUE_TIMEZONE,
+  }).format(utc);
+  return weekday === 'Sat' || weekday === 'Sun';
+}
+
 function calendarDayDiff(from: string, to: string): number {
   const [fy, fm, fd] = from.split('-').map(Number);
   const [ty, tm, td] = to.split('-').map(Number);

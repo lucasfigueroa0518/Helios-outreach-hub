@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { ApprovedDraftExportRow } from '@/lib/drafting/exports';
 import { preflightFinalDraftExport, preflightFinalDraftSend } from '@/lib/drafting/exports';
 import { deriveEmailEngagementLifecycle } from '@/lib/drafting/repository';
+import { isDuplicateSentConstraintError } from '@/lib/drafting/agentmail-send-errors';
 import {
   isEmailSendConfigured,
   outboundReplyToAddress,
@@ -117,5 +118,22 @@ test('deriveEmailEngagementLifecycle prefers reply over delivered', () => {
       replied_at: null,
     }),
     'bounced',
+  );
+});
+
+test('duplicate sent unique-index errors are treated as already sent, not a failed send', () => {
+  assert.equal(
+    isDuplicateSentConstraintError(
+      'duplicate key value violates unique constraint "idx_email_sends_item_sent"',
+    ),
+    true,
+  );
+  assert.equal(
+    isDuplicateSentConstraintError(new Error('idx_email_sends_item_sent')),
+    true,
+  );
+  assert.equal(
+    isDuplicateSentConstraintError('AGENT_MAIL_API is not configured'),
+    false,
   );
 });

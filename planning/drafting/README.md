@@ -89,7 +89,11 @@ For each campaign lead, the system will:
 - Preserving historical copies of email bodies or subjects.
 - Producing multiple stylistic variants per lead.
 - Building a generic autonomous-agent platform.
-- Adding a paid third-party enrichment provider in this release.
+- Adding a paid third-party enrichment provider to Hub Enrich. Auto campaigns
+  source lists via Apollo people-search in our code (not Claude); enrich is
+  paid. Keep enriching never-seen IDs until `emails_per_day` verified emails
+  attach; never re-enrich a stored ID. Stopping at N enrich attempts with
+  fewer than N attached leads is a defect.
 - Letting a full batch barrier delay the first available draft.
 
 ## Decisions made by this plan

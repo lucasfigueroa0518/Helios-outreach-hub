@@ -5,6 +5,7 @@ import { dbQuery, dbTransaction } from '@/lib/db';
 import {
   AGENTMAIL_ACCOUNT_PAUSE_RETRY_MS,
   isAgentMailAccountSendingPausedError,
+  isDuplicateSentConstraintError,
   nextAgentMailPauseRetryAt,
 } from '@/lib/drafting/agentmail-send-errors';
 import {
@@ -100,11 +101,27 @@ export type QueueDayBucket = {
   used: number;
   capacity: number;
   remaining: number;
+  reserved: number;
   sent_count: number;
   queued_count: number;
   over_cap: boolean;
   items: QueueListItem[];
   inboxes: QueueInboxDayStat[];
+  reservations: Array<{
+    campaign_id: string;
+    campaign_name: string;
+    reserved: number;
+    emails_per_day: number;
+    already_slotted: number;
+    queue_color: string;
+    lead_attributes: {
+      industry: string;
+      seniority: string;
+      geography: string;
+      business_size: string;
+    };
+    expansion_step: number;
+  }>;
 };
 
 export type ActiveQueueInfo = {
@@ -122,6 +139,37 @@ const QUEUE_ROW_SELECT = `
   from_email, created_at::text, updated_at::text
 `;
 
+async function itemAlreadySent(itemId: string): Promise<boolean> {
+  const { rows } = await dbQuery<{ ok: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1
+         FROM outreach.email_sends
+        WHERE drafting_item_id = $1
+          AND status = 'sent'
+     ) AS ok`,
+    [itemId],
+  );
+  return Boolean(rows[0]?.ok);
+}
+
+async function markQueueItemSent(
+  queueId: string,
+  payload: { subject: string; toEmail: string; recipientName: string },
+): Promise<void> {
+  await dbQuery(
+    `UPDATE outreach.email_send_queue
+        SET status = 'sent',
+            subject = $2,
+            to_email = $3,
+            recipient_name = $4,
+            error_message = NULL,
+            updated_at = now()
+      WHERE id = $1
+        AND status IN ('queued', 'sending', 'failed')`,
+    [queueId, payload.subject, payload.toEmail, payload.recipientName],
+  );
+}
+
 async function recordEmailSend(input: {
   itemId: string;
   status: 'sent' | 'failed';
@@ -135,27 +183,34 @@ async function recordEmailSend(input: {
   senderInboxId?: string | null;
   errorMessage?: string | null;
 }): Promise<void> {
-  await dbQuery(
-    `INSERT INTO outreach.email_sends (
+  const values = [
+    input.itemId,
+    input.provider ?? 'agentmail',
+    input.providerMessageId ?? null,
+    input.providerRfcMessageId ?? null,
+    input.providerThreadId ?? null,
+    input.senderInboxId ?? null,
+    input.status,
+    input.fromEmail,
+    input.toEmail,
+    input.subject,
+    input.errorMessage ?? null,
+    input.status === 'sent' ? new Date().toISOString() : null,
+  ];
+  const insertSql = `INSERT INTO outreach.email_sends (
        drafting_item_id, provider, provider_message_id, provider_rfc_message_id,
        provider_thread_id, sender_inbox_id, status,
        from_email, to_email, subject, error_message, sent_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-    [
-      input.itemId,
-      input.provider ?? 'agentmail',
-      input.providerMessageId ?? null,
-      input.providerRfcMessageId ?? null,
-      input.providerThreadId ?? null,
-      input.senderInboxId ?? null,
-      input.status,
-      input.fromEmail,
-      input.toEmail,
-      input.subject,
-      input.errorMessage ?? null,
-      input.status === 'sent' ? new Date().toISOString() : null,
-    ],
-  );
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`;
+  if (input.status === 'sent') {
+    await dbQuery(
+      `${insertSql}
+       ON CONFLICT (drafting_item_id) WHERE (status = 'sent') DO NOTHING`,
+      values,
+    );
+    return;
+  }
+  await dbQuery(insertSql, values);
 }
 
 export async function inboxUsageFromDate(fromDate: string): Promise<Map<string, number>> {
@@ -439,6 +494,7 @@ export async function enqueueOverflowBatch(
   const pending: EnqueueSendInput[] = [];
 
   for (const item of items) {
+    if (await itemAlreadySent(item.itemId)) continue;
     const existing = await loadActiveQueueByItemIds([item.itemId]);
     const active = existing.get(item.itemId);
     if (active) {
@@ -715,6 +771,9 @@ export async function executeImmediateResend(input: {
 }> {
   const { isTransientSendError } = await import('@/lib/drafting/provider-admission');
   const toEmail = resolveSendToEmail(input.campaignId, input.toEmail);
+  if (await itemAlreadySent(input.itemId)) {
+    return { status: 'sent' };
+  }
   try {
     const result = await sendOutreachEmail({
       fromName: input.fromName,
@@ -751,6 +810,9 @@ export async function executeImmediateResend(input: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isDuplicateSentConstraintError(error) || await itemAlreadySent(input.itemId)) {
+      return { status: 'sent' };
+    }
     if (isAgentMailAccountSendingPausedError(message)) {
       return { status: 'failed', error: message, providerUnavailable: true };
     }
@@ -811,9 +873,12 @@ export async function listSendQueue(input: {
   await backfillQueueIdentities();
   const today = formatNyDate();
   const cap = await getDailyInboxCap();
-  const allInboxes = await listSenderInboxes({
+  const listedInboxes = await listSenderInboxes({
     identitySlug: input.identitySlug ?? undefined,
   });
+  const allInboxes = input.inboxEmail
+    ? listedInboxes.filter((inbox) => inbox.email.toLowerCase() === input.inboxEmail!.toLowerCase())
+    : listedInboxes;
   const usage = await inboxUsageFromDate(input.from);
   const params: unknown[] = [input.from, input.to, SEND_QUEUE_TIMEZONE];
   const clauses = [
@@ -882,6 +947,39 @@ export async function listSendQueue(input: {
     byDate.set(boardDate, list);
   }
 
+  const identities = [...new Map(allInboxes.map((inbox) => [inbox.identity_slug, inbox.identity_slug])).keys()]
+    .map((slug) => ({
+      slug,
+      display_name: slug === 'lucas' ? 'Lucas Figueroa' : 'Thomas Pozo',
+    }));
+
+  const reservationsByDate = new Map<string, QueueDayBucket['reservations']>();
+  if (input.ownerId && !input.campaignId) {
+    const { loadLiveAutoReservationSources } = await import('@/lib/auto-campaigns/repository');
+    const { computeAutoReservations } = await import('@/lib/auto-campaigns/reservations');
+    const sources = await loadLiveAutoReservationSources(input.ownerId);
+    const locks = computeAutoReservations({
+      today,
+      from: input.from,
+      to: input.to,
+      campaigns: sources,
+    });
+    for (const lock of locks) {
+      const list = reservationsByDate.get(lock.schedule_date) ?? [];
+      list.push({
+        campaign_id: lock.campaign_id,
+        campaign_name: lock.campaign_name,
+        reserved: lock.reserved,
+        emails_per_day: lock.emails_per_day,
+        already_slotted: lock.already_slotted,
+        queue_color: lock.queue_color,
+        lead_attributes: lock.lead_attributes,
+        expansion_step: lock.expansion_step,
+      });
+      reservationsByDate.set(lock.schedule_date, list);
+    }
+  }
+
   const days: QueueDayBucket[] = [];
   let cursor = input.from;
   while (cursor <= input.to) {
@@ -907,32 +1005,31 @@ export async function listSendQueue(input: {
     const used = inboxStats.reduce((sum, row) => sum + row.used, 0);
     const capacity = cap * Math.max(1, allInboxes.length);
     const queuedCount = items.filter((i) => i.status === 'queued' || i.status === 'sending').length;
+    const reservations = reservationsByDate.get(cursor) ?? [];
+    const reserved = reservations.reduce((sum, row) => sum + row.reserved, 0);
     days.push({
       schedule_date: cursor,
       used,
       capacity,
-      remaining: remainingCapacity(used, capacity),
+      reserved,
+      remaining: remainingCapacity(used + reserved, capacity),
       sent_count: inboxStats.reduce((sum, row) => sum + row.sent_count, 0),
       queued_count: queuedCount,
-      over_cap: inboxStats.some((row) => row.over_cap),
+      over_cap: inboxStats.some((row) => row.over_cap) || used + reserved > capacity,
       items,
       inboxes: inboxStats,
+      reservations,
     });
     cursor = addCalendarDays(cursor, 1);
   }
-
-  const identities = [...new Map(allInboxes.map((inbox) => [inbox.identity_slug, inbox.identity_slug])).keys()]
-    .map((slug) => ({
-      slug,
-      display_name: slug === 'lucas' ? 'Lucas Figueroa' : 'Thomas Pozo',
-    }));
 
   return {
     days,
     today,
     from: input.from,
     to: input.to,
-    today_remaining: await todayRemaining(undefined, new Date(), input.identitySlug),
+    today_remaining: days.find((day) => day.schedule_date === today)?.remaining
+      ?? await todayRemaining(undefined, new Date(), input.identitySlug),
     daily_inbox_cap: cap,
     identities,
     inboxes: allInboxes.map((inbox) => ({
@@ -1600,12 +1697,49 @@ export async function sendNowQueueItems(input: {
   }));
 
   for (const row of sendRows) {
-    await dbQuery(
+    if (await itemAlreadySent(row.drafting_item_id)) {
+      if (row.orchestration_job_id) {
+        await cancelWorkByIds([row.orchestration_job_id]);
+      }
+      const payload = await loadLatestSendablePayload(row.drafting_item_id);
+      await markQueueItemSent(row.id, {
+        subject: payload?.subject ?? row.subject,
+        toEmail: payload?.toEmail ?? row.to_email,
+        recipientName: payload?.recipientName ?? row.recipient_name ?? row.to_email,
+      });
+      results.push({
+        queue_id: row.id,
+        item_id: row.drafting_item_id,
+        status: 'sent',
+      });
+      continue;
+    }
+
+    const claimed = await dbQuery<{ id: string }>(
       `UPDATE outreach.email_send_queue
           SET status = 'sending', updated_at = now()
-        WHERE id = $1`,
+        WHERE id = $1
+          AND status IN ('queued', 'failed')
+        RETURNING id`,
       [row.id],
     );
+    if (claimed.rows.length === 0) {
+      if (await itemAlreadySent(row.drafting_item_id)) {
+        results.push({
+          queue_id: row.id,
+          item_id: row.drafting_item_id,
+          status: 'sent',
+        });
+      } else {
+        results.push({
+          queue_id: row.id,
+          item_id: row.drafting_item_id,
+          status: 'queued',
+          schedule_date: row.schedule_date,
+        });
+      }
+      continue;
+    }
 
     const payload = await loadLatestSendablePayload(row.drafting_item_id);
     if (!payload) {
@@ -1628,17 +1762,11 @@ export async function sendNowQueueItems(input: {
 
     const sendResult = await executeImmediateResend(payload);
     if (sendResult.status === 'sent') {
-      await dbQuery(
-        `UPDATE outreach.email_send_queue
-            SET status = 'sent',
-                subject = $2,
-                to_email = $3,
-                recipient_name = $4,
-                error_message = NULL,
-                updated_at = now()
-          WHERE id = $1`,
-        [row.id, payload.subject, payload.toEmail, payload.recipientName],
-      );
+      await markQueueItemSent(row.id, {
+        subject: payload.subject,
+        toEmail: payload.toEmail,
+        recipientName: payload.recipientName,
+      });
       results.push({
         queue_id: row.id,
         item_id: row.drafting_item_id,
@@ -1895,19 +2023,22 @@ export async function processQueuedEmailSend(queueId: string): Promise<{
     return { status: 'failed', error: 'Draft is no longer sendable' };
   }
 
+  if (await itemAlreadySent(claimed.row.drafting_item_id)) {
+    await markQueueItemSent(queueId, {
+      subject: payload.subject,
+      toEmail: payload.toEmail,
+      recipientName: payload.recipientName,
+    });
+    return { status: 'sent' };
+  }
+
   const sendResult = await executeImmediateResend(payload);
   if (sendResult.status === 'sent') {
-    await dbQuery(
-      `UPDATE outreach.email_send_queue
-          SET status = 'sent',
-              subject = $2,
-              to_email = $3,
-              recipient_name = $4,
-              error_message = NULL,
-              updated_at = now()
-        WHERE id = $1`,
-      [queueId, payload.subject, payload.toEmail, payload.recipientName],
-    );
+    await markQueueItemSent(queueId, {
+      subject: payload.subject,
+      toEmail: payload.toEmail,
+      recipientName: payload.recipientName,
+    });
     return { status: 'sent' };
   }
 
@@ -1962,6 +2093,37 @@ export async function processQueuedEmailSend(queueId: string): Promise<{
 /** Reconcile: revive overdue queued rows + reclaim crash-stuck sending rows. */
 export async function reconcileEmailSendQueue(limit = 50): Promise<number> {
   const pageLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+
+  const alreadySent = await dbQuery<{
+    id: string;
+    orchestration_job_id: string | null;
+    subject: string;
+    to_email: string;
+    recipient_name: string | null;
+  }>(
+    `SELECT q.id, q.orchestration_job_id, q.subject, q.to_email, q.recipient_name
+       FROM outreach.email_send_queue q
+      WHERE q.status IN ('queued', 'failed')
+        AND EXISTS (
+          SELECT 1
+            FROM outreach.email_sends s
+           WHERE s.drafting_item_id = q.drafting_item_id
+             AND s.status = 'sent'
+        )
+      ORDER BY q.updated_at ASC
+      LIMIT $1`,
+    [pageLimit],
+  );
+  for (const row of alreadySent.rows) {
+    if (row.orchestration_job_id) {
+      await cancelWorkByIds([row.orchestration_job_id]);
+    }
+    await markQueueItemSent(row.id, {
+      subject: row.subject,
+      toEmail: row.to_email,
+      recipientName: row.recipient_name ?? row.to_email,
+    });
+  }
 
   const pausedFailed = await dbQuery<{ id: string; error_message: string; updated_at: string }>(
     `SELECT q.id, q.error_message, q.updated_at::text

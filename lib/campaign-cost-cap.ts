@@ -158,6 +158,29 @@ export async function assertCampaignUnderCostCap(input: {
   needsEnrichment: boolean;
   fallbackLeadCount?: number;
 }): Promise<CampaignCostGate> {
+  const { rows } = await dbQuery<{ kind: string | null }>(
+    `SELECT kind FROM outreach.campaigns WHERE id = $1`,
+    [input.campaignId],
+  );
+  if (rows[0]?.kind === 'auto') {
+    const estimate = await getCampaignCostEstimate({
+      campaignId: input.campaignId,
+      fallbackLeadCount: input.fallbackLeadCount,
+    });
+    return {
+      cap_usd: CAMPAIGN_COST_CAP_USD,
+      lead_count: estimate.lead_count,
+      estimated_total_usd: 0,
+      per_lead_usd: 0,
+      remaining_usd: CAMPAIGN_COST_CAP_USD,
+      over_cap: false,
+      at_or_over_cap: false,
+      leads_to_remove: 0,
+      method: estimate.method,
+      note: 'Auto campaigns are exempt from the $50 cost cap.',
+      estimate,
+    };
+  }
   const gate = await buildCampaignCostGate(input);
   if (gate.over_cap) throw new CampaignCostCapError(gate);
   return gate;

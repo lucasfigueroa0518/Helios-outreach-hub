@@ -8,10 +8,13 @@ import {
   formatAgentMailDisplayName,
   resolveAgentMailSenderName,
   inferIdentitySlug,
+  inboxCountForIdentity,
   isBlockedOutreachFrom,
   isOutreachInbox,
   isVerifyInbox,
   OUTREACH_INBOX_EMAILS,
+  parseSenderIdentitySlug,
+  campaignSenderIdentity,
   personalForwardEmailForInbox,
   resolveConfiguredVerifyInbox,
 } from '@/lib/agentmail-inboxes';
@@ -74,6 +77,16 @@ test('identity slug is inferred from snapshot fields', () => {
   assert.equal(inferIdentitySlug({ workEmail: 'lucas@heliosgroup.ai' }), 'lucas');
   assert.equal(inferIdentitySlug({ displayName: 'Thomas Pozo' }), 'tommy');
   assert.equal(inferIdentitySlug({ displayName: 'Lucas Figueroa' }), 'lucas');
+});
+
+test('campaign sender identity parses lucas/tommy and defaults legacy null to lucas', () => {
+  assert.equal(parseSenderIdentitySlug('Tommy'), 'tommy');
+  assert.equal(parseSenderIdentitySlug('lucas'), 'lucas');
+  assert.equal(parseSenderIdentitySlug('other'), null);
+  assert.equal(campaignSenderIdentity(null), 'lucas');
+  assert.equal(campaignSenderIdentity('tommy'), 'tommy');
+  assert.equal(inboxCountForIdentity('lucas'), 4);
+  assert.equal(inboxCountForIdentity('tommy'), 3);
 });
 
 test('AgentMail inbox display names never fall back to AgentMail', () => {

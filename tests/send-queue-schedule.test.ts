@@ -12,7 +12,9 @@ import {
   computeShareTransferCount,
   formatNyDate,
   formatNyDateLabel,
+  formatNyWeekday,
   inboxUsageKey,
+  isNyCalendarWeekend,
   nyWallTimeToUtc,
   randomNySendTime,
   remainingCapacity,
@@ -196,4 +198,13 @@ test('computeShareTransferCount equalizes backlog', () => {
   assert.equal(computeShareTransferCount(0, 0), 0);
   assert.equal(computeShareTransferCount(5, 5), 0);
   assert.equal(computeShareTransferCount(41, 20), 11); // 61 total → 30/31
+});
+
+test('NY calendar weekend flags Sat/Sun without treating empty weekdays as weekends', () => {
+  assert.equal(formatNyWeekday('2026-08-20'), 'Thu');
+  assert.equal(isNyCalendarWeekend('2026-08-20'), false);
+  assert.equal(isNyCalendarWeekend('2026-08-21'), false);
+  assert.equal(isNyCalendarWeekend('2026-08-22'), true);
+  assert.equal(isNyCalendarWeekend('2026-08-23'), true);
+  assert.equal(formatNyWeekday('2026-08-22'), 'Sat');
 });

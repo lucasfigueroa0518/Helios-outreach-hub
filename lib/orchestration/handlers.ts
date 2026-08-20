@@ -807,6 +807,27 @@ async function handleReconcile(
     // Keep reconcile resilient.
   }
 
+  let autoCyclesEnqueued = 0;
+  try {
+    const { loadDueLiveAutoCampaigns } = await import('@/lib/auto-campaigns/repository');
+    const { enqueueAutoCycleJob } = await import('@/lib/auto-campaigns/enqueue');
+    const due = await loadDueLiveAutoCampaigns();
+    for (const campaign of due) {
+      await enqueueAutoCycleJob(campaign.id, campaign.owner_id, new Date());
+      autoCyclesEnqueued += 1;
+    }
+  } catch {
+    // Keep reconcile resilient.
+  }
+
+  let autoDraftsQueued = 0;
+  try {
+    const { enqueueReadyAutoDraftsForAllOwners } = await import('@/lib/auto-campaigns/auto-send');
+    autoDraftsQueued = await enqueueReadyAutoDraftsForAllOwners();
+  } catch {
+    // Keep reconcile resilient.
+  }
+
   return {
     children,
     result: {
@@ -825,6 +846,8 @@ async function handleReconcile(
       pausedRepliesRevived,
       dashboardsDailyEnqueued,
       anthropicCostSyncEnqueued,
+      autoCyclesEnqueued,
+      autoDraftsQueued,
       staleWorkersRemoved,
     },
   };
@@ -868,6 +891,14 @@ async function handleAnthropicCostSync(
   };
 }
 
+async function handleAutoCycle(
+  job: OrchestrationJob<'auto.cycle'>,
+): Promise<WorkHandlerResult> {
+  const { runAutoCampaignCycle } = await import('@/lib/auto-campaigns/cycle');
+  const result = await runAutoCampaignCycle(job.payload.campaignId);
+  return { result };
+}
+
 type Handler = (job: OrchestrationJob) => Promise<WorkHandlerResult>;
 
 const HANDLERS: Record<WorkKind, Handler> = {
@@ -894,6 +925,7 @@ const HANDLERS: Record<WorkKind, Handler> = {
   'reply.followup': handleReplyFollowup as Handler,
   'dashboards.daily_update': handleDashboardsDailyUpdate as Handler,
   'anthropic.cost_sync': handleAnthropicCostSync as Handler,
+  'auto.cycle': handleAutoCycle as Handler,
   'system.reconcile': handleReconcile as Handler,
 };
 
@@ -914,6 +946,7 @@ export async function markTerminalWorkFailure(
     'run.finalize',
     'pre_enriched.ingest',
     'pre_enriched.assemble',
+    'auto.cycle',
   ].includes(job.kind)) return;
   const runId = (job.payload as { runId?: string }).runId;
   if (!runId) return;

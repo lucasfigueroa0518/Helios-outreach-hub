@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-type TabKey = 'review' | 'draft';
+type TabKey = 'review' | 'draft' | 'prospect';
 
 type Notice = {
   message: string;
@@ -16,13 +16,14 @@ export function CampaignTabs({
   reviewEnabled: reviewEnabledInitial,
   draftEnabled: draftEnabledInitial = false,
   showReview = true,
+  mode = 'manual',
 }: {
   campaignId: string;
-  active: 'upload' | 'review' | 'draft';
+  active: 'upload' | 'review' | 'draft' | 'prospect';
   reviewEnabled: boolean;
   draftEnabled?: boolean;
-  /** Pre-enriched campaigns hide Review entirely (Upload → Draft only). */
   showReview?: boolean;
+  mode?: 'manual' | 'auto';
 }) {
   const [reviewEnabled, setReviewEnabled] = useState(reviewEnabledInitial);
   const [draftEnabled, setDraftEnabled] = useState(draftEnabledInitial);
@@ -45,9 +46,8 @@ export function CampaignTabs({
     setDraftEnabled(draftEnabledInitial);
   }, [draftEnabledInitial]);
 
-  // Keep Review unlocked after enrichment finishes — server render is stale on the Upload tab.
   useEffect(() => {
-    if (!showReview || reviewEnabled) return;
+    if (mode === 'auto' || !showReview || reviewEnabled) return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -64,7 +64,7 @@ export function CampaignTabs({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [campaignId, reviewEnabled, showReview]);
+  }, [campaignId, reviewEnabled, showReview, mode]);
 
   const blockNavigation = useCallback(
     (key: TabKey, message: string) => {
@@ -80,15 +80,26 @@ export function CampaignTabs({
     [clearTimers],
   );
 
+  const outreachLabel = mode === 'auto' ? 'Outreach' : 'Draft';
+
   return (
     <div className="segmented segmented--nav" aria-label="Campaign sections">
-      <Link
-        href={`/campaigns/${campaignId}`}
-        className={`segmented__item${active === 'upload' ? ' segmented__item--active' : ''}`}
-      >
-        Upload
-      </Link>
-      {showReview && (
+      {mode === 'auto' ? (
+        <Link
+          href={`/campaigns/${campaignId}/prospect`}
+          className={`segmented__item${active === 'prospect' ? ' segmented__item--active' : ''}`}
+        >
+          Prospect
+        </Link>
+      ) : (
+        <Link
+          href={`/campaigns/${campaignId}`}
+          className={`segmented__item${active === 'upload' ? ' segmented__item--active' : ''}`}
+        >
+          Upload
+        </Link>
+      )}
+      {mode !== 'auto' && showReview && (
         reviewEnabled ? (
           <Link
             href={`/campaigns/${campaignId}/review`}
@@ -107,12 +118,12 @@ export function CampaignTabs({
           </button>
         )
       )}
-      {draftEnabled ? (
+      {draftEnabled || mode === 'auto' ? (
         <Link
           href={`/campaigns/${campaignId}/draft`}
           className={`segmented__item${active === 'draft' ? ' segmented__item--active' : ''}`}
         >
-          Draft
+          {outreachLabel}
         </Link>
       ) : (
         <button
@@ -130,7 +141,7 @@ export function CampaignTabs({
             )
           }
         >
-          Draft
+          {outreachLabel}
         </button>
       )}
       {notice && (

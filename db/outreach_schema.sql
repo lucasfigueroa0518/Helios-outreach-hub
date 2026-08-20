@@ -56,8 +56,100 @@ CREATE TABLE IF NOT EXISTS outreach.campaigns (
 ALTER TABLE outreach.campaigns
     ADD COLUMN IF NOT EXISTS needs_enrichment boolean NOT NULL DEFAULT true;
 
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'manual';
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS auto_status text;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS auto_error text;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS emails_per_day int;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS follow_up_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS lead_attributes jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS expansion_step int NOT NULL DEFAULT 0;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS queue_color text;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS next_cycle_at timestamptz;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS last_cycle_at timestamptz;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS apollo_search_page int NOT NULL DEFAULT 1;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS apollo_search_params jsonb;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS thin_days int NOT NULL DEFAULT 0;
+ALTER TABLE outreach.campaigns
+    ADD COLUMN IF NOT EXISTS sender_identity_slug text;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'campaigns_sender_identity_slug_check'
+        AND conrelid = 'outreach.campaigns'::regclass
+    ) THEN
+      ALTER TABLE outreach.campaigns
+        ADD CONSTRAINT campaigns_sender_identity_slug_check
+        CHECK (
+          sender_identity_slug IS NULL
+          OR sender_identity_slug IN ('lucas', 'tommy')
+        ) NOT VALID;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'campaigns_kind_check'
+        AND conrelid = 'outreach.campaigns'::regclass
+    ) THEN
+      ALTER TABLE outreach.campaigns
+        ADD CONSTRAINT campaigns_kind_check
+        CHECK (kind IN ('manual', 'auto')) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'campaigns_auto_status_check'
+        AND conrelid = 'outreach.campaigns'::regclass
+    ) THEN
+      ALTER TABLE outreach.campaigns
+        ADD CONSTRAINT campaigns_auto_status_check
+        CHECK (
+          auto_status IS NULL OR auto_status IN (
+            'pending_sender', 'live', 'paused', 'exhausted', 'error'
+          )
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'campaigns_expansion_step_check'
+        AND conrelid = 'outreach.campaigns'::regclass
+    ) THEN
+      ALTER TABLE outreach.campaigns
+        ADD CONSTRAINT campaigns_expansion_step_check
+        CHECK (expansion_step >= 0 AND expansion_step <= 4) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'campaigns_apollo_search_page_check'
+        AND conrelid = 'outreach.campaigns'::regclass
+    ) THEN
+      ALTER TABLE outreach.campaigns
+        ADD CONSTRAINT campaigns_apollo_search_page_check
+        CHECK (apollo_search_page >= 1) NOT VALID;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_campaigns_owner ON outreach.campaigns (owner_id);
 CREATE INDEX IF NOT EXISTS idx_campaigns_status ON outreach.campaigns (status);
+CREATE INDEX IF NOT EXISTS idx_campaigns_auto_due
+    ON outreach.campaigns (next_cycle_at)
+    WHERE kind = 'auto' AND status = 'active' AND auto_status = 'live';
 
 -- ── Campaign Tags ────────────────────────────────────────────────────────────
 
@@ -161,6 +253,13 @@ ALTER TABLE outreach.leads
     ADD COLUMN IF NOT EXISTS email_verified_at timestamptz,
     ADD COLUMN IF NOT EXISTS email_mx_status text;
 
+ALTER TABLE outreach.leads
+    ADD COLUMN IF NOT EXISTS apollo_person_id text;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_apollo_person_id_unique
+    ON outreach.leads (apollo_person_id)
+    WHERE apollo_person_id IS NOT NULL;
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -263,6 +362,14 @@ ALTER TABLE outreach.campaign_leads
 -- download → edit → Upload & Replace round-trip). Flows into the drafting input.
 ALTER TABLE outreach.campaign_leads
     ADD COLUMN IF NOT EXISTS extra_fields jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE outreach.campaign_leads
+    ADD COLUMN IF NOT EXISTS sourced_on date;
+ALTER TABLE outreach.campaign_leads
+    ADD COLUMN IF NOT EXISTS expansion_step int;
+
+CREATE INDEX IF NOT EXISTS idx_campaign_leads_sourced_on
+    ON outreach.campaign_leads (campaign_id, sourced_on);
 
 CREATE INDEX IF NOT EXISTS idx_campaign_leads_prior_pending
     ON outreach.campaign_leads (run_id)

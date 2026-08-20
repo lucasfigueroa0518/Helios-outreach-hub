@@ -67,11 +67,15 @@ export function ReviewTable({
   initialRows,
   pollWhileEnriching = false,
   pollWhileVerifying = false,
+  emptyCopy,
+  compact = false,
 }: {
   campaignId: string;
   initialRows: Row[];
   pollWhileEnriching?: boolean;
   pollWhileVerifying?: boolean;
+  emptyCopy?: string;
+  compact?: boolean;
 }) {
   const [rows, setRows] = useState(initialRows);
   const [error, setError] = useState<string | null>(null);
@@ -135,7 +139,7 @@ export function ReviewTable({
     return (
       <div className="empty-state">
         <strong>No leads on the sheet yet</strong>
-        <span>Upload a CSV or Excel file on the Upload tab, run Enrich, then return here. Extracted people will appear as rows in this table.</span>
+        <span>{emptyCopy ?? 'Upload a CSV or Excel file on the Upload tab, run Enrich, then return here. Extracted people will appear as rows in this table.'}</span>
       </div>
     );
   }
@@ -147,15 +151,18 @@ export function ReviewTable({
   return (
     <div className="review-sheet">
       {error ? <p className="field__error" role="status">{error}</p> : null}
-      <div className="review-guide">
+      <div className={`review-guide${compact ? ' review-guide--compact' : ''}`}>
         <div className="review-guide__intro">
-          <strong>Review your enriched leads</strong>
-          <p>
-            Check the emails found for each lead, along with job titles, companies,
-            and locations added during enrichment. Use the color guide to quickly spot
-            enriched details, missing emails, and prior relationships.
-          </p>
+          <strong>{compact ? "Today's Leads" : 'Review your enriched leads'}</strong>
+          {compact ? null : (
+            <p>
+              Check the emails found for each lead, along with job titles, companies,
+              and locations added during enrichment. Use the color guide to quickly spot
+              enriched details, missing emails, and prior relationships.
+            </p>
+          )}
         </div>
+        {compact ? null : (
         <div className="review-guide__key" aria-label="Table color guide">
           <strong>Color guide</strong>
           <div className="review-guide__items">
@@ -177,6 +184,7 @@ export function ReviewTable({
             </div>
           </div>
         </div>
+        )}
       </div>
       <div className="sheet-table-wrap">
         <table className="data-table review-table">

@@ -31,6 +31,7 @@ test('lane limits are positive and bounded', () => {
     assert.ok(limit >= 1);
     assert.ok(limit <= 100);
   }
+  assert.equal(laneLimit('auto_campaign'), 1);
 });
 
 test('drafting defaults double without changing enrichment or mailbox lanes', () => {

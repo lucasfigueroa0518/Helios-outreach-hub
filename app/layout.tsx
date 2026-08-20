@@ -24,7 +24,7 @@ const pragmatica = localFont({
 
 export const metadata = {
   title: 'Outreach Hub',
-  description: 'Outreach Hub — lead enrichment for Embark',
+  description: 'Outreach Hub — lead enrichment for Helios',
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

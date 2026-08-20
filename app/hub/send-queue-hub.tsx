@@ -1,14 +1,22 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { CalendarClock, Send, SquareSplitVertical, Trash2, RotateCcw, X } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react';
+import { Send, SquareSplitVertical, Trash2, RotateCcw, X } from 'lucide-react';
 
 import { hubGetJson, invalidateHubCache } from '@/app/hub/hub-data';
 import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { requestJson } from '@/lib/client-request';
 import { isAgentMailAccountSendingPausedError } from '@/lib/drafting/agentmail-send-errors';
-import { formatNyDateLabel } from '@/lib/drafting/send-queue-schedule';
+import { formatNyDateLabel, formatNyWeekday, isNyCalendarWeekend } from '@/lib/drafting/send-queue-schedule';
+import {
+  explainHeldSlots,
+  explainOpenSlots,
+  explainSentOnDay,
+  explainSentToday,
+  explainTakenSlots,
+  explainWaiting,
+} from '@/lib/drafting/send-queue-metrics';
 import type { QueueDayBucket, QueueListItem, ShareTargetUser } from '@/lib/drafting/send-queue';
 
 type QueueListResponse = {
@@ -55,6 +63,43 @@ function queueCardStatus(item: QueueListItem): string {
   return item.status;
 }
 
+function QueueMetric({
+  label,
+  value,
+  tip,
+  compact = false,
+}: {
+  label: string;
+  value: number | string;
+  tip: string;
+  compact?: boolean;
+}) {
+  const body = compact ? (
+    <>
+      <strong className="queue-metric__value">{value}</strong>
+      <span className="queue-metric__label">{label}</span>
+    </>
+  ) : (
+    <>
+      <span className="queue-metric__label">{label}</span>
+      <strong className="queue-metric__value">{value}</strong>
+    </>
+  );
+  if (compact) {
+    return (
+      <span className="queue-metric queue-metric--compact" title={tip} tabIndex={0}>
+        {body}
+      </span>
+    );
+  }
+  return (
+    <span className="queue-metric" tabIndex={0}>
+      {body}
+      <span className="queue-metric__tip" role="tooltip">{tip}</span>
+    </span>
+  );
+}
+
 export function SendQueueHub({
   sessionUserId,
   sessionEmail,
@@ -77,6 +122,7 @@ export function SendQueueHub({
   const [dragIds, setDragIds] = useState<string[] | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detail, setDetail] = useState<QueueDetailResponse | null>(null);
+  const [reservationDetail, setReservationDetail] = useState<QueueDayBucket['reservations'][number] | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareTargets, setShareTargets] = useState<ShareTargetUser[] | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
@@ -275,10 +321,15 @@ export function SendQueueHub({
     });
   }
 
-  const backlogCount = data?.days.reduce(
-    (sum, day) => sum + day.items.filter((i) => i.status === 'queued' || i.status === 'failed' || i.status === 'sending').length,
-    0,
-  ) ?? 0;
+  const waitingItems = data?.days.flatMap((day) => day.items) ?? [];
+  const waitingQueued = waitingItems.filter((item) => item.status === 'queued').length;
+  const waitingSending = waitingItems.filter((item) => item.status === 'sending').length;
+  const waitingFailed = waitingItems.filter((item) => item.status === 'failed').length;
+  const backlogCount = waitingQueued + waitingSending + waitingFailed;
+  const todayBucket = data?.days.find((day) => day.schedule_date === data.today) ?? null;
+  const inboxCount = data?.inboxes.length ?? 0;
+  const capPerInbox = data?.daily_inbox_cap ?? 10;
+  const slotCapacity = capPerInbox * Math.max(1, inboxCount);
 
   async function openShareMenu() {
     if (shareOpen) {
@@ -347,18 +398,43 @@ export function SendQueueHub({
           <div>
             <div className="card__title">Send queue</div>
             <div className="card__subtitle">
-              {data?.daily_inbox_cap ?? 10} emails/day per inbox · America/New_York · drag to move by day
+              {capPerInbox}/day per inbox
+              {inboxCount > 0 ? ` · ${inboxCount} inbox${inboxCount === 1 ? '' : 'es'} = ${slotCapacity} slots on weekdays` : ''}
+              {' · America/New_York · drag to move by day'}
             </div>
           </div>
         </div>
         <div className="card__body">
           <div className="send-queue-toolbar">
             <div className="send-queue-toolbar__stats">
-              <span>
-                <CalendarClock size={14} aria-hidden="true" />
-                {' '}Today remaining: <strong>{data?.today_remaining ?? '—'}</strong>
-              </span>
-              <span>Backlog: <strong>{backlogCount}</strong></span>
+              <QueueMetric
+                label="Sent today"
+                value={todayBucket?.sent_count ?? 0}
+                tip={explainSentToday(todayBucket?.sent_count ?? 0)}
+              />
+              <QueueMetric
+                label="Waiting"
+                value={backlogCount}
+                tip={explainWaiting({
+                  queued: waitingQueued,
+                  sending: waitingSending,
+                  failed: waitingFailed,
+                })}
+              />
+              <QueueMetric
+                label="Open today"
+                value={data?.today_remaining ?? '—'}
+                tip={todayBucket
+                  ? explainOpenSlots({
+                    inboxCount: Math.max(1, inboxCount),
+                    capPerInbox,
+                    taken: todayBucket.used,
+                    held: todayBucket.reserved,
+                    open: todayBucket.remaining,
+                    capacity: todayBucket.capacity,
+                  })
+                  : 'Free inbox slots today after sent, queued, and auto holds. Hover a day column for the same math.'}
+              />
             </div>
             <div className="send-queue-filter">
               <span>Sender</span>
@@ -547,20 +623,35 @@ export function SendQueueHub({
           {error && <p className="field__error">{error}</p>}
           {message && <p className="field__notice">{message}</p>}
 
-          {!loading && data && backlogCount === 0 && data.days.every((d) => d.items.length === 0) ? (
+          {!loading && data && backlogCount === 0 && data.days.every((d) => d.items.length === 0 && (d.reservations ?? []).length === 0) ? (
             <p className="send-queue-empty">
-              No queued emails. Sends under today’s 20-cap go out immediately; overflow lands here.
+              No queued emails. Open slots today send immediately; overflow lands here.
             </p>
           ) : null}
 
           <div className="send-queue-board" ref={boardRef}>
             {data?.days.map((day) => {
               const isPast = day.schedule_date < data.today;
+              const weekend = isNyCalendarWeekend(day.schedule_date);
+              const weekday = formatNyWeekday(day.schedule_date);
               const selectable = day.items.filter((item) => item.status === 'queued' || item.status === 'failed');
+              const takenTip = explainTakenSlots({
+                sent: day.sent_count,
+                queued: day.queued_count,
+                taken: day.used,
+              });
+              const openTip = explainOpenSlots({
+                inboxCount: Math.max(1, Math.round(day.capacity / capPerInbox) || inboxCount),
+                capPerInbox,
+                taken: day.used,
+                held: day.reserved,
+                open: day.remaining,
+                capacity: day.capacity,
+              });
               return (
               <div
                 key={day.schedule_date}
-                className={`send-queue-day${day.schedule_date === data.today ? ' send-queue-day--today' : ''}${isPast ? ' send-queue-day--past' : ''}`}
+                className={`send-queue-day${day.schedule_date === data.today ? ' send-queue-day--today' : ''}${isPast ? ' send-queue-day--past' : ''}${weekend ? ' send-queue-day--weekend' : ''}`}
                 onDragOver={isPast ? undefined : (e) => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = 'move';
@@ -570,17 +661,40 @@ export function SendQueueHub({
                 <div className="send-queue-day__head">
                   <div>
                     <strong>
-                      {day.schedule_date === data.today
-                        ? 'Today'
-                        : formatNyDateLabel(day.schedule_date)}
+                      {day.schedule_date === data.today ? 'Today' : formatNyDateLabel(day.schedule_date)}
+                      <span className="send-queue-day__weekday"> · {weekday}</span>
                     </strong>
-                    <span className="send-queue-day__date">{day.schedule_date}</span>
+                    {weekend ? (
+                      <span className="send-queue-day__weekend-tag">Weekend</span>
+                    ) : (
+                      <span className="send-queue-day__date">{day.schedule_date}</span>
+                    )}
                   </div>
-                  <div className="send-queue-day__cap">
-                    {day.used} / {day.capacity}
-                    {day.sent_count > 0 ? ` · ${day.sent_count} sent` : ''}
-                    {day.over_cap ? ' · over cap' : ''}
-                  </div>
+                  {weekend && day.used === 0 && day.reserved === 0 ? (
+                    <div className="send-queue-day__cap">Auto skips Sat/Sun</div>
+                  ) : (
+                    <div className="send-queue-day__cap">
+                      <div
+                        className="queue-slot-bar"
+                        aria-hidden="true"
+                        title={openTip}
+                      >
+                        <span className="queue-slot-bar__sent" style={{ flexGrow: Math.max(day.sent_count, 0) }} />
+                        <span className="queue-slot-bar__queued" style={{ flexGrow: Math.max(day.queued_count, 0) }} />
+                        <span className="queue-slot-bar__held" style={{ flexGrow: Math.max(day.reserved, 0) }} />
+                        <span className="queue-slot-bar__open" style={{ flexGrow: Math.max(day.remaining, 0.5) }} />
+                      </div>
+                      <div className="send-queue-day__metrics">
+                        <QueueMetric compact label="sent" value={day.sent_count} tip={explainSentOnDay(day.sent_count, day.schedule_date === data.today)} />
+                        <QueueMetric compact label="queued" value={day.queued_count} tip={takenTip} />
+                        {day.reserved > 0 ? (
+                          <QueueMetric compact label="held" value={day.reserved} tip={explainHeldSlots(day.reserved)} />
+                        ) : null}
+                        <QueueMetric compact label={`open / ${day.capacity}`} value={day.remaining} tip={openTip} />
+                        {day.over_cap ? <span className="send-queue-day__over">Over cap</span> : null}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {selectable.length > 0 ? (
                   <button
@@ -590,10 +704,42 @@ export function SendQueueHub({
                   >
                     Select all
                   </button>
-                ) : day.items.length === 0 ? (
-                  <p className="send-queue-day__empty">{isPast ? 'No sends' : 'Drop here'}</p>
+                ) : day.items.length === 0 && (day.reservations ?? []).length === 0 ? (
+                  <p className="send-queue-day__empty">
+                    {isPast
+                      ? (weekend ? 'Weekend · no sends' : 'No sends')
+                      : weekend
+                        ? 'Weekend — auto campaigns skip these days'
+                        : 'Drop here'}
+                  </p>
                 ) : null}
                 <ul className="send-queue-cards">
+                  {(day.reservations ?? []).map((lock) => (
+                    <li key={`lock-${lock.campaign_id}-${day.schedule_date}`}>
+                      <button
+                        type="button"
+                        className="send-queue-card send-queue-card--lock"
+                        style={{ '--lock-color': `var(--${lock.queue_color})` } as CSSProperties}
+                        title={explainHeldSlots(lock.reserved, lock.emails_per_day, lock.already_slotted)}
+                        onClick={() => {
+                          setDetailId(null);
+                          setReservationDetail(lock);
+                        }}
+                      >
+                        <span className="send-queue-card__name">{lock.campaign_name}</span>
+                        <span className="send-queue-card__subject">
+                          {lock.already_slotted > 0
+                            ? `Holding ${lock.reserved} of ${lock.emails_per_day}/day`
+                            : `${lock.emails_per_day}/day upcoming`}
+                        </span>
+                        <span className="send-queue-card__meta">
+                          {lock.already_slotted > 0
+                            ? `${lock.already_slotted} on this day (sent + queued)`
+                            : 'No emails yet — seats held so other campaigns cannot take them'}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
                   {day.items.map((item) => (
                     <li
                       key={item.id}
@@ -614,7 +760,10 @@ export function SendQueueHub({
                       <button
                         type="button"
                         className="send-queue-card__body"
-                        onClick={() => setDetailId(item.id)}
+                        onClick={() => {
+                          setReservationDetail(null);
+                          setDetailId(item.id);
+                        }}
                       >
                         <span className="send-queue-card__name">
                           {item.recipient_name || item.to_email}
@@ -681,6 +830,47 @@ export function SendQueueHub({
                 <p className="field__error">{detail.item.error_message}</p>
               ) : null}
               <pre className="send-queue-detail__body">{detail.body_text ?? '(no draft body)'}</pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {reservationDetail ? (
+        <div className="drawer-overlay" role="presentation" onClick={() => setReservationDetail(null)}>
+          <div
+            className="drawer"
+            role="dialog"
+            aria-label="Auto campaign reservation"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="drawer__header">
+              <div>
+                <div className="card__title">{reservationDetail.campaign_name}</div>
+                <div className="card__subtitle">Held inbox seats for this auto campaign</div>
+              </div>
+              <button
+                type="button"
+                className="drawer__close"
+                aria-label="Close"
+                onClick={() => setReservationDetail(null)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="drawer__body send-queue-detail">
+              <p title={explainHeldSlots(reservationDetail.reserved, reservationDetail.emails_per_day, reservationDetail.already_slotted)}>
+                <strong>Held:</strong> {reservationDetail.reserved} seats still to fill of {reservationDetail.emails_per_day}/day
+              </p>
+              <p>
+                <strong>On this day:</strong> {reservationDetail.already_slotted} already queued or sent
+                {' '}(this is not “sent today” — queued mail counts here too)
+              </p>
+              <p><strong>Industry:</strong> {reservationDetail.lead_attributes.industry || '—'}</p>
+              <p><strong>Seniority:</strong> {reservationDetail.lead_attributes.seniority || '—'}</p>
+              <p><strong>Geography:</strong> {reservationDetail.lead_attributes.geography || '—'}</p>
+              <p><strong>Business size:</strong> {reservationDetail.lead_attributes.business_size || '—'}</p>
+              <p>
+                <Link href={`/campaigns/${reservationDetail.campaign_id}/prospect`}>Open Prospect</Link>
+              </p>
             </div>
           </div>
         </div>

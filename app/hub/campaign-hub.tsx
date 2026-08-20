@@ -11,6 +11,12 @@ import { HubLoadingSpinner } from '@/app/hub/hub-loading';
 import { LeadListTutorial } from '@/app/hub/lead-list-tutorial';
 
 import { requestJson } from '@/lib/client-request';
+import {
+  inboxCountForIdentity,
+  SENDER_IDENTITY_LABELS,
+  type SenderIdentitySlug,
+} from '@/lib/agentmail-inboxes';
+import { LivePulse } from '@/app/components/live-pulse';
 import { TagBadge } from '@/app/components/tag-badge';
 import { TagInputPopover } from '@/app/components/tag-input-popover';
 import type { TagWithColor } from '@/lib/campaigns';
@@ -23,6 +29,12 @@ type Campaign = {
   status: 'active' | 'archived';
   merged_into_id: string | null;
   needs_enrichment?: boolean;
+  kind?: 'manual' | 'auto';
+  auto_status?: 'pending_sender' | 'live' | 'paused' | 'exhausted' | 'error' | null;
+  auto_error?: string | null;
+  emails_per_day?: number | null;
+  sender_identity_slug?: SenderIdentitySlug | null;
+  sent_count?: number;
   created_at: string;
   updated_at: string;
   lead_count: number;
@@ -50,6 +62,13 @@ export function CampaignHub({ email }: { email: string }) {
   const [selected, setSelected] = useState<Campaign | null>(null);
   const [name, setName] = useState('');
   const [needsEnrichment, setNeedsEnrichment] = useState(false);
+  const [kind, setKind] = useState<'manual' | 'auto'>('manual');
+  const [industry, setIndustry] = useState('');
+  const [seniority, setSeniority] = useState('');
+  const [geography, setGeography] = useState('');
+  const [businessSize, setBusinessSize] = useState('');
+  const [emailsPerDay, setEmailsPerDay] = useState('10');
+  const [senderIdentity, setSenderIdentity] = useState<SenderIdentitySlug>('lucas');
   const [sourceId, setSourceId] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -92,6 +111,13 @@ export function CampaignHub({ email }: { email: string }) {
   function openCreate() {
     setName(`Campaign #${campaigns.length + 1}`);
     setNeedsEnrichment(false);
+    setKind('manual');
+    setIndustry('');
+    setSeniority('');
+    setGeography('');
+    setBusinessSize('');
+    setEmailsPerDay('10');
+    setSenderIdentity('lucas');
     setSelected(null);
     setDialog('create');
   }
@@ -115,11 +141,31 @@ export function CampaignHub({ email }: { email: string }) {
       const data = await requestJson<{ campaign: { id: string } }>('/api/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, needs_enrichment: needsEnrichment }),
+        body: JSON.stringify(
+          kind === 'auto'
+            ? {
+              name,
+              kind: 'auto',
+              needs_enrichment: false,
+              emails_per_day: Number.parseInt(emailsPerDay.replace(/[^\d]/g, ''), 10),
+              sender_identity_slug: senderIdentity,
+              lead_attributes: {
+                industry,
+                seniority,
+                geography,
+                business_size: businessSize,
+              },
+            }
+            : { name, needs_enrichment: needsEnrichment },
+        ),
       });
       invalidateHubCache('/api/campaigns');
       setDialog(null);
-      router.push(`/campaigns/${data.campaign.id}`);
+      router.push(
+        kind === 'auto'
+          ? `/campaigns/${data.campaign.id}/prospect`
+          : `/campaigns/${data.campaign.id}`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create campaign');
     } finally {
@@ -214,8 +260,8 @@ export function CampaignHub({ email }: { email: string }) {
                 <span>Personalized Outreach.</span>
               </h2>
               <p>
-                Upload an image, csv, doc, pdf, and more. eVA enriches your leads, researches them,
-                situates them in Embark&apos;s prior work, and drafts personalized emails for each one.
+                Upload an image, csv, doc, pdf, and more. Outreach Hub enriches your leads, researches them,
+                situates them in Helios&apos;s prior work, and drafts personalized emails for each one.
               </p>
             </div>
             <LeadListTutorial />
@@ -244,7 +290,7 @@ export function CampaignHub({ email }: { email: string }) {
                   <CampaignRow
                     key={campaign.id}
                     campaign={campaign}
-                    canMerge={active.length > 1}
+                    canMerge={active.length > 1 && campaign.kind !== 'auto'}
                     onRename={() => openRename(campaign)}
                     onMerge={() => openMerge(campaign)}
                     onArchive={() => void archiveCampaign(campaign)}
@@ -289,15 +335,123 @@ export function CampaignHub({ email }: { email: string }) {
             </div>
             <div className="card__body">
               {dialog === 'create' && (
-                <CampaignNameForm
-                  name={name}
-                  setName={setName}
-                  saving={saving}
-                  submitLabel="Create Campaign"
-                  onSubmit={createCampaign}
-                  needsEnrichment={needsEnrichment}
-                  setNeedsEnrichment={setNeedsEnrichment}
-                />
+                <form className="login-form" onSubmit={(event) => void createCampaign(event)}>
+                  <div className="field">
+                    <span className="field__label">Campaign type</span>
+                    <div className="segmented" style={{ width: 'fit-content' }}>
+                      <button
+                        type="button"
+                        className={`segmented__item${kind === 'manual' ? ' segmented__item--active' : ''}`}
+                        onClick={() => setKind('manual')}
+                      >
+                        Manual
+                      </button>
+                      <button
+                        type="button"
+                        className={`segmented__item${kind === 'auto' ? ' segmented__item--active' : ''}`}
+                        onClick={() => setKind('auto')}
+                      >
+                        Auto
+                      </button>
+                    </div>
+                  </div>
+                  <label className="field">
+                    <span className="field__label">Campaign name</span>
+                    <input
+                      className="field__input"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      placeholder={kind === 'auto' ? 'e.g. NYC CRE principals' : 'e.g. Q3 Fintech VP Outreach'}
+                      autoFocus
+                      required
+                    />
+                  </label>
+                  {kind === 'manual' ? (
+                    <div className="field" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 'var(--space-2)' }}>
+                      <span className="field__label" id="needs-enrichment-label">Needs Enrichment?</span>
+                      <div className="segmented" style={{ width: 'fit-content' }}>
+                        <button
+                          type="button"
+                          className={`segmented__item${!needsEnrichment ? ' segmented__item--active' : ''}`}
+                          onClick={() => setNeedsEnrichment(false)}
+                        >
+                          No
+                        </button>
+                        <button
+                          type="button"
+                          className={`segmented__item${needsEnrichment ? ' segmented__item--active' : ''}`}
+                          onClick={() => setNeedsEnrichment(true)}
+                        >
+                          Yes
+                        </button>
+                      </div>
+                      <p className="field__hint" style={{ margin: 0, marginTop: 'var(--space-1)' }}>
+                        {needsEnrichment
+                          ? 'Upload → Enrich → Review → Draft. Use for lists that still need email and profile research.'
+                          : 'Upload → Draft. Use for lists that are already enriched with validated emails.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="field">
+                        <span className="field__label">Industry</span>
+                        <input className="field__input" value={industry} onChange={(event) => setIndustry(event.target.value)} placeholder="Commercial real estate" required />
+                      </label>
+                      <label className="field">
+                        <span className="field__label">Seniority</span>
+                        <input className="field__input" value={seniority} onChange={(event) => setSeniority(event.target.value)} placeholder="Owner / principal" required />
+                      </label>
+                      <label className="field">
+                        <span className="field__label">Geography</span>
+                        <input className="field__input" value={geography} onChange={(event) => setGeography(event.target.value)} placeholder="New York City" required />
+                      </label>
+                      <label className="field">
+                        <span className="field__label">Business size</span>
+                        <input className="field__input" value={businessSize} onChange={(event) => setBusinessSize(event.target.value)} placeholder="11–50" required />
+                      </label>
+                      <div className="field">
+                        <span className="field__label">Sender</span>
+                        <div className="segmented" style={{ width: 'fit-content' }}>
+                          {(['lucas', 'tommy'] as const).map((slug) => (
+                            <button
+                              key={slug}
+                              type="button"
+                              className={`segmented__item${senderIdentity === slug ? ' segmented__item--active' : ''}`}
+                              onClick={() => setSenderIdentity(slug)}
+                            >
+                              {SENDER_IDENTITY_LABELS[slug]}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="field__hint" style={{ margin: 0, marginTop: 'var(--space-1)' }}>
+                          {SENDER_IDENTITY_LABELS[senderIdentity]} has {inboxCountForIdentity(senderIdentity)} inboxes
+                          {' '}({inboxCountForIdentity(senderIdentity) * 10}/day at the 10-per-inbox cap). Packs only onto that sender.
+                        </p>
+                      </div>
+                      <label className="field">
+                        <span className="field__label">Emails per day</span>
+                        <input
+                          className="field__input"
+                          value={emailsPerDay}
+                          onChange={(event) => setEmailsPerDay(event.target.value)}
+                          placeholder="50"
+                          required
+                        />
+                      </label>
+                    </>
+                  )}
+                  <button
+                    className="btn btn--primary"
+                    type="submit"
+                    disabled={
+                      saving
+                      || !name.trim()
+                      || (kind === 'auto' && (!industry.trim() || !seniority.trim() || !geography.trim() || !businessSize.trim() || !Number.parseInt(emailsPerDay.replace(/[^\d]/g, ''), 10)))
+                    }
+                  >
+                    {saving ? 'Saving…' : 'Create Campaign'}
+                  </button>
+                </form>
               )}
               {dialog === 'rename' && (
                 <CampaignNameForm name={name} setName={setName} saving={saving} submitLabel="Save Name" onSubmit={renameCampaign} />
@@ -328,17 +482,13 @@ export function CampaignHub({ email }: { email: string }) {
 
 function CampaignNameForm({
   name, setName, saving, submitLabel, onSubmit,
-  needsEnrichment, setNeedsEnrichment,
 }: {
   name: string;
   setName: (name: string) => void;
   saving: boolean;
   submitLabel: string;
   onSubmit: (event: FormEvent) => Promise<void>;
-  needsEnrichment?: boolean;
-  setNeedsEnrichment?: (value: boolean) => void;
 }) {
-  const showEnrichmentToggle = typeof needsEnrichment === 'boolean' && setNeedsEnrichment;
   return (
     <form className="login-form" onSubmit={(event) => void onSubmit(event)}>
       <label className="field">
@@ -352,32 +502,6 @@ function CampaignNameForm({
           required
         />
       </label>
-      {showEnrichmentToggle && (
-        <div className="field" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 'var(--space-2)' }}>
-          <span className="field__label" id="needs-enrichment-label">Needs Enrichment?</span>
-          <div className="segmented" style={{ width: 'fit-content' }}>
-            <button
-              type="button"
-              className={`segmented__item${!needsEnrichment ? ' segmented__item--active' : ''}`}
-              onClick={() => setNeedsEnrichment(false)}
-            >
-              No
-            </button>
-            <button
-              type="button"
-              className={`segmented__item${needsEnrichment ? ' segmented__item--active' : ''}`}
-              onClick={() => setNeedsEnrichment(true)}
-            >
-              Yes
-            </button>
-          </div>
-          <p className="field__hint" style={{ margin: 0, marginTop: 'var(--space-1)' }}>
-            {needsEnrichment
-              ? 'Upload → Enrich → Review → Draft. Use for lists that still need email and profile research.'
-              : 'Upload → Draft. Use for lists that are already enriched with validated emails.'}
-          </p>
-        </div>
-      )}
       <button className="btn btn--primary" type="submit" disabled={saving || !name.trim()}>
         {saving ? 'Saving…' : submitLabel}
       </button>
@@ -432,14 +556,25 @@ function CampaignRow({
   const draftingLabel = draftingTotal > 0
     ? `Drafting · ${draftingGenerated} of ${draftingTotal}`
     : 'Drafting';
+  const isAuto = campaign.kind === 'auto';
+  const isLive = isAuto && campaign.auto_status === 'live';
+  const href = isAuto
+    ? `/campaigns/${campaign.id}/prospect`
+    : draftingActive
+      ? `/campaigns/${campaign.id}/draft`
+      : `/campaigns/${campaign.id}`;
+  const meta = isAuto
+    ? `${SENDER_IDENTITY_LABELS[campaign.sender_identity_slug ?? 'lucas']} · ${campaign.sent_count ?? 0} sent all-time · ${campaign.lead_count} pulled · ${(campaign.auto_status ?? 'pending_sender').replace(/_/g, ' ')}`
+    : `${campaign.lead_count} ${campaign.lead_count === 1 ? 'lead' : 'leads'} · ${formatDate(campaign.last_run_at)}`;
 
   return (
-    <div className={`campaign-row${draftingActive ? ' campaign-row--drafting' : ''}`}>
+    <div className={`campaign-row${draftingActive ? ' campaign-row--drafting' : ''}${isLive ? ' campaign-row--live' : ''}`}>
       <Link
         className="campaign-row__main"
-        href={draftingActive ? `/campaigns/${campaign.id}/draft` : `/campaigns/${campaign.id}`}
+        href={href}
       >
         <span className="campaign-row__heading">
+          {isLive ? <LivePulse live label="Live" /> : null}
           <span className="campaign-row__name">{campaign.name}</span>
           {draftingActive ? (
             <span className="campaign-row__drafting" role="status" aria-live="polite">
@@ -448,7 +583,7 @@ function CampaignRow({
             </span>
           ) : null}
         </span>
-        <span className="campaign-row__meta">{campaign.lead_count} {campaign.lead_count === 1 ? 'lead' : 'leads'} · {formatDate(campaign.last_run_at)}</span>
+        <span className="campaign-row__meta">{meta}</span>
       </Link>
 
       <div className="campaign-row__actions" style={{ gap: '6px' }}>

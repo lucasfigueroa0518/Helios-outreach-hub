@@ -19,3 +19,9 @@ export function isAgentMailAccountSendingPausedError(error: unknown): boolean {
 export function nextAgentMailPauseRetryAt(from = new Date()): Date {
   return new Date(from.getTime() + AGENTMAIL_ACCOUNT_PAUSE_RETRY_MS);
 }
+
+/** Unique index `idx_email_sends_item_sent` — one successful send per draft. */
+export function isDuplicateSentConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /idx_email_sends_item_sent/i.test(message);
+}

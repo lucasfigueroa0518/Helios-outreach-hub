@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { AutoOutreachBoard, type OutreachCarouselFocus } from '@/app/campaigns/[id]/draft/auto-outreach-board';
 import { DraftingActivityPanel } from '@/app/campaigns/[id]/draft/drafting-activity-panel';
 import { DraftingStatusStrip } from '@/app/campaigns/[id]/draft/drafting-status-strip';
 import {
@@ -19,6 +20,10 @@ import {
   sortDraftRows,
   type DraftSortMode,
 } from '@/lib/drafting/draft-review-order';
+import {
+  outreachFocusLabel,
+  rowMatchesOutreachFocus,
+} from '@/lib/auto-campaigns/outreach-insight';
 
 type WorkspaceMode = 'email' | 'leads';
 
@@ -71,12 +76,29 @@ function pickCurrentItemId(snapshot: DraftingSnapshot, previousId: string | null
   return generated?.id ?? null;
 }
 
-export function DraftWorkspace({ campaignId }: { campaignId: string }) {
+export function DraftWorkspace({
+  campaignId,
+  autoMode = false,
+  autoStatus = null,
+  emailsPerDay = 0,
+  nextCycleAt = null,
+  autoError = null,
+  expansionStep = 0,
+}: {
+  campaignId: string;
+  autoMode?: boolean;
+  autoStatus?: string | null;
+  emailsPerDay?: number;
+  nextCycleAt?: string | null;
+  autoError?: string | null;
+  expansionStep?: number;
+}) {
   const [snapshot, setSnapshot] = useState<DraftingSnapshot | null>(null);
   const [launching, setLaunching] = useState(() => readDraftingLaunch(campaignId));
   const [mode, setMode] = useState<WorkspaceMode>('email');
   const [sortMode, setSortMode] = useState<DraftSortMode>(() => readDraftSortMode(campaignId));
   const [currentItemId, setCurrentItemId] = useState<string | null>(null);
+  const [outreachFocus, setOutreachFocus] = useState<OutreachCarouselFocus | null>(null);
   const [sender, setSender] = useState<SenderProfile | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,6 +115,21 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
   const loadInFlight = useRef(false);
   const defaultedMode = useRef(false);
   const exportPulseId = useRef(0);
+  const snapshotRef = useRef(snapshot);
+  const sortModeRef = useRef(sortMode);
+  snapshotRef.current = snapshot;
+  sortModeRef.current = sortMode;
+
+  useEffect(() => {
+    if (!outreachFocus) return;
+    const current = snapshotRef.current;
+    if (!current) return;
+    const match = sortDraftRows(
+      current.email_rows.filter((row) => rowMatchesOutreachFocus(row, outreachFocus)),
+      sortModeRef.current,
+    )[0];
+    if (match) setCurrentItemId(match.id);
+  }, [outreachFocus]);
 
   const applyOptimisticApprove = useCallback((itemId: string, recipientLabel: string) => {
     exportPulseId.current += 1;
@@ -540,8 +577,6 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
       || snapshot.counts.running > 0
     ),
   );
-  const snapshotRef = useRef(snapshot);
-  snapshotRef.current = snapshot;
 
   useEffect(() => {
     if (!hasWorkspace && !launching) return;
@@ -610,7 +645,47 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
     (launching && !snapshot?.workspace?.id)
     || (loading && !snapshot);
 
+  const outreachBoard = autoMode ? (
+    <AutoOutreachBoard
+      campaignId={campaignId}
+      live={autoStatus === 'live'}
+      emailsPerDay={emailsPerDay}
+      nextCycleAt={nextCycleAt}
+      autoStatus={autoStatus}
+      autoError={autoError}
+      expansionStep={expansionStep}
+      snapshot={snapshot}
+      launching={showLaunchShell}
+      focus={outreachFocus}
+      onSelectFocus={(next) => {
+        setMode('email');
+        setOutreachFocus(next);
+      }}
+      pollError={pollError}
+      rescueBusy={rescueBusy}
+      rescueNotice={rescueNotice}
+      pauseBusy={pauseBusy}
+      resumeBusy={resumeBusy}
+      pauseNotice={pauseNotice}
+      onRetryPoll={() => void loadSnapshot()}
+      onRescue={() => void rescueRun()}
+      onPause={() => void pauseRun()}
+      onResume={() => void resumeRun()}
+    />
+  ) : null;
+
   if (showLaunchShell) {
+    if (autoMode) {
+      return (
+        <div className="drafting-workspace drafting-workspace--launching">
+          {outreachBoard}
+          {snapshot ? <DraftingActivityPanel snapshot={snapshot} /> : null}
+          <div className="drafting-launch-shell" role="status">
+            <p>Verified leads will land here as today’s list fills — drafts appear as they finish.</p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="drafting-workspace drafting-workspace--launching">
         <DraftingStatusStrip
@@ -642,6 +717,30 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
   }
 
   if (!snapshot?.workspace.id) {
+    if (autoMode) {
+      return (
+        <div className="drafting-workspace">
+          {outreachBoard}
+          <div className="empty-state">
+            <strong>{pollError ? 'Couldn’t load drafts' : 'Waiting on today’s first drafts'}</strong>
+            <span>
+              {pollError
+                ? pollError
+                : 'Prospecting attaches verified emails, then this tab writes and queues them. Nothing to review yet.'}
+            </span>
+            {pollError ? (
+              <button type="button" className="btn btn--primary" onClick={() => void loadSnapshot()}>
+                Retry
+              </button>
+            ) : (
+              <Link href={`/campaigns/${campaignId}/prospect`} className="btn btn--secondary">
+                Open Prospect
+              </Link>
+            )}
+          </div>
+        </div>
+      );
+    }
     if (pollError) {
       return (
         <div className="empty-state">
@@ -668,6 +767,17 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
   }
 
   if (snapshot.counts.total === 0) {
+    if (autoMode) {
+      return (
+        <div className="drafting-workspace">
+          {outreachBoard}
+          <div className="empty-state">
+            <strong>No drafts yet</strong>
+            <span>Today’s verified leads will show here as soon as the first email is written.</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="empty-state">
         <strong>There are no reviewed leads to draft yet.</strong>
@@ -680,26 +790,33 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="drafting-workspace">
-      <DraftingStatusStrip
-        snapshot={snapshot}
-        launching={false}
-        leadsAttention={leadsAttention}
-        pollError={pollError}
-        decisionsMade={decisionsMade}
-        rescueBusy={rescueBusy}
-        rescueNotice={rescueNotice}
-        pauseBusy={pauseBusy}
-        resumeBusy={resumeBusy}
-        cancelRunBusy={cancelRunBusy}
-        pauseNotice={pauseNotice}
-        onRetryPoll={() => void loadSnapshot()}
-        onRescue={() => void rescueRun()}
-        onPause={() => void pauseRun()}
-        onResume={() => void resumeRun()}
-        onCancelRun={() => void cancelRun()}
-        onSelectEmail={() => setMode('email')}
-        onSelectLeads={() => setMode('leads')}
-      />
+      {autoMode ? outreachBoard : (
+        <DraftingStatusStrip
+          snapshot={snapshot}
+          launching={false}
+          leadsAttention={leadsAttention}
+          pollError={pollError}
+          decisionsMade={decisionsMade}
+          rescueBusy={rescueBusy}
+          rescueNotice={rescueNotice}
+          pauseBusy={pauseBusy}
+          resumeBusy={resumeBusy}
+          cancelRunBusy={cancelRunBusy}
+          pauseNotice={pauseNotice}
+          onRetryPoll={() => void loadSnapshot()}
+          onRescue={() => void rescueRun()}
+          onPause={() => void pauseRun()}
+          onResume={() => void resumeRun()}
+          onCancelRun={() => void cancelRun()}
+          onSelectEmail={() => setMode('email')}
+          onSelectLeads={() => setMode('leads')}
+        />
+      )}
+
+      {autoMode
+        && (!snapshot.workspace.generation_complete || snapshot.activity.items.length > 0 || snapshot.counts.running > 0)
+        ? <DraftingActivityPanel snapshot={snapshot} />
+        : null}
 
       <div className="drafting-mode-bar">
         <div className="segmented drafting-mode-toggle" role="tablist" aria-label="Drafting mode">
@@ -723,6 +840,17 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
             {leadsAttention > 0 ? <span className="drafting-attention-dot" aria-hidden="true" /> : null}
           </button>
         </div>
+        {autoMode && outreachFocus ? (
+          <button
+            type="button"
+            className="segmented__item segmented__item--active outreach-focus-chip"
+            onClick={() => setOutreachFocus(null)}
+            title="Clear filter"
+          >
+            {outreachFocusLabel(outreachFocus)}
+            <span aria-hidden="true"> ×</span>
+          </button>
+        ) : null}
         {mode === 'email' ? (
           <div className="segmented drafting-sort-toggle" role="group" aria-label="Sort drafts">
             <button
@@ -768,8 +896,10 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
         <>
           <EmailReview
             campaignId={campaignId}
+            autoMode={autoMode}
             rows={snapshot.email_rows}
             sortMode={sortMode}
+            focus={outreachFocus}
             currentItemId={currentItemId}
             sender={sender}
             sends={snapshot.sends}
@@ -805,7 +935,7 @@ export function DraftWorkspace({ campaignId }: { campaignId: string }) {
         />
       )}
 
-      {!snapshot.workspace.generation_complete || snapshot.activity.items.length > 0 || snapshot.counts.running > 0 ? (
+      {!autoMode && (!snapshot.workspace.generation_complete || snapshot.activity.items.length > 0 || snapshot.counts.running > 0) ? (
         <DraftingActivityPanel snapshot={snapshot} />
       ) : null}
     </div>

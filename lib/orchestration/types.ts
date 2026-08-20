@@ -22,6 +22,7 @@ export const WORK_KINDS = [
   'reply.followup',
   'dashboards.daily_update',
   'anthropic.cost_sync',
+  'auto.cycle',
   'system.reconcile',
 ] as const;
 
@@ -41,6 +42,7 @@ export const WORK_LANES = [
   'email_send',
   'dashboards',
   'maintenance',
+  'auto_campaign',
 ] as const;
 
 export type WorkLane = typeof WORK_LANES[number];
@@ -92,6 +94,7 @@ export type WorkPayloadMap = {
   'reply.followup': { replySendId: string };
   'dashboards.daily_update': { reason?: string };
   'anthropic.cost_sync': { reason?: string };
+  'auto.cycle': { campaignId: string; ownerId: string };
   'system.reconcile': { reason?: string };
 };
 

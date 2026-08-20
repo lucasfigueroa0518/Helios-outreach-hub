@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import type { PoolClient } from 'pg';
 
-import { inferIdentitySlug } from '@/lib/agentmail-inboxes';
+import {
+  campaignSenderIdentity,
+  inferIdentitySlug,
+  primaryInboxEmailForIdentity,
+  SENDER_IDENTITY_DEFAULTS,
+  type SenderIdentitySlug,
+} from '@/lib/agentmail-inboxes';
 import { assertCampaignOwner } from '@/lib/auth';
 import { formatEmailStatus } from '@/lib/campaign-sheet';
 import { dbQuery, dbTransaction } from '@/lib/db';
@@ -498,7 +504,9 @@ async function loadLatestEmailSendStatuses(
             open_count, click_count
        FROM outreach.email_sends
       WHERE drafting_item_id = ANY($1::uuid[])
-      ORDER BY drafting_item_id, updated_at DESC`,
+      ORDER BY drafting_item_id,
+               CASE WHEN status = 'sent' THEN 0 ELSE 1 END,
+               updated_at DESC`,
     [itemIds],
   );
   return new Map(rows.map((row) => [row.drafting_item_id, {
@@ -1016,6 +1024,74 @@ export async function resolveSenderHeadshotStoragePath(input: {
   return rows[0]?.headshot_storage_path?.trim() || null;
 }
 
+export async function ensureSenderProfileForIdentity(
+  userId: string,
+  slug: SenderIdentitySlug,
+): Promise<SenderProfileRow> {
+  const { rows } = await dbQuery<SenderProfileRow>(
+    `SELECT ${SENDER_PROFILE_SELECT}
+       FROM outreach.sender_profiles
+      WHERE user_id = $1
+      ORDER BY is_default DESC, updated_at DESC`,
+    [userId],
+  );
+  const match = rows.find((row) => inferIdentitySlug({
+    workEmail: row.work_email,
+    displayName: row.display_name,
+  }) === slug);
+  if (match) {
+    assertSenderProfileSignatureReady(match);
+    return match;
+  }
+
+  const defaults = SENDER_IDENTITY_DEFAULTS[slug];
+  const workEmail = primaryInboxEmailForIdentity(slug);
+  try {
+    const created = await dbQuery<SenderProfileRow>(
+      `INSERT INTO outreach.sender_profiles (
+         user_id, display_name, work_email, title, company_name, signature_mode, is_default
+       ) VALUES ($1, $2, $3, $4, $5, 'name_and_role', false)
+       RETURNING ${SENDER_PROFILE_SELECT}`,
+      [userId, defaults.displayName, workEmail, defaults.title, defaults.companyName],
+    );
+    const row = created.rows[0];
+    if (!row) throw new DraftingValidationError('Unable to create sender profile');
+    assertSenderProfileSignatureReady(row);
+    return row;
+  } catch (error) {
+    const existing = await dbQuery<SenderProfileRow>(
+      `SELECT ${SENDER_PROFILE_SELECT}
+         FROM outreach.sender_profiles
+        WHERE user_id = $1 AND lower(work_email) = lower($2)
+        LIMIT 1`,
+      [userId, workEmail],
+    );
+    if (existing.rows[0]) {
+      assertSenderProfileSignatureReady(existing.rows[0]);
+      return existing.rows[0];
+    }
+    throw error;
+  }
+}
+
+async function resolveSenderForCampaign(
+  userId: string,
+  campaignId: string,
+  senderProfileId?: string,
+): Promise<SenderProfileRow> {
+  const { rows } = await dbQuery<{ kind: string; sender_identity_slug: string | null }>(
+    `SELECT COALESCE(kind, 'manual') AS kind, sender_identity_slug
+       FROM outreach.campaigns
+      WHERE id = $1 AND owner_id = $2`,
+    [campaignId, userId],
+  );
+  if (!rows[0]) throw new DraftingNotFoundError('Campaign not found');
+  if (rows[0].kind === 'auto') {
+    return ensureSenderProfileForIdentity(userId, campaignSenderIdentity(rows[0].sender_identity_slug));
+  }
+  return resolveSenderProfile(userId, senderProfileId);
+}
+
 async function resolveSenderProfile(
   userId: string,
   senderProfileId?: string,
@@ -1518,8 +1594,9 @@ export async function syncCampaignLeadsIntoDraftingWorkspace(
   }
 
   const trigger: SyncDraftingLeadsTrigger = input.trigger ?? 'retry';
-  const sender = await resolveSenderProfile(
+  const sender = await resolveSenderForCampaign(
     ownerId,
+    campaignId,
     input.senderProfileId ?? workspace.sender_profile_id ?? undefined,
   );
   const assets = await loadDraftingAssets();
@@ -1879,7 +1956,7 @@ export async function startDraftingWorkspace(
     }
   }
 
-  const sender = await resolveSenderProfile(ownerId, input.senderProfileId);
+  const sender = await resolveSenderForCampaign(ownerId, campaignId, input.senderProfileId);
   const assets = await loadDraftingAssets();
   const idempotencyKey = input.idempotencyKey ?? randomUUID();
   const budgetLimit = input.budgetCapUsd ?? process.env.DRAFTING_DEFAULT_BATCH_BUDGET_USD ?? '50.0000';

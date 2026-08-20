@@ -65,6 +65,32 @@ export const SENDER_IDENTITY_DEFAULTS: Record<
   },
 };
 
+export function parseSenderIdentitySlug(value: unknown): SenderIdentitySlug | null {
+  const slug = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (slug === 'lucas' || slug === 'tommy') return slug;
+  return null;
+}
+
+/** Auto campaigns with a null column (legacy) pack onto Lucas. */
+export function campaignSenderIdentity(value: unknown): SenderIdentitySlug {
+  return parseSenderIdentitySlug(value) ?? 'lucas';
+}
+
+export const SENDER_IDENTITY_LABELS: Record<SenderIdentitySlug, string> = {
+  lucas: 'Lucas',
+  tommy: 'Tommy',
+};
+
+export function primaryInboxEmailForIdentity(slug: SenderIdentitySlug): string {
+  const seed = OUTREACH_INBOX_SEEDS.find((row) => row.identity === slug && row.isPrimary);
+  if (!seed) throw new Error(`No primary inbox seeded for ${slug}`);
+  return seed.email;
+}
+
+export function inboxCountForIdentity(slug: SenderIdentitySlug): number {
+  return OUTREACH_INBOX_SEEDS.filter((row) => row.identity === slug).length;
+}
+
 export function normalizeEmailAddress(value: string | null | undefined): string {
   return (value ?? '').trim().toLowerCase();
 }

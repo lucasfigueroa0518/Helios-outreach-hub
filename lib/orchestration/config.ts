@@ -37,6 +37,7 @@ export const KIND_CONFIG: Record<WorkKind, KindConfig> = {
   'reply.followup': { lane: 'email_send', defaultMaxAttempts: 3, priority: 30 },
   'dashboards.daily_update': { lane: 'dashboards', defaultMaxAttempts: 2, priority: -5 },
   'anthropic.cost_sync': { lane: 'maintenance', defaultMaxAttempts: 2, priority: -8 },
+  'auto.cycle': { lane: 'auto_campaign', defaultMaxAttempts: 2, priority: 15 },
   'system.reconcile': { lane: 'maintenance', defaultMaxAttempts: 3, priority: -10 },
 };
 
@@ -77,6 +78,8 @@ export function laneLimit(lane: WorkLane): number {
       // cannot starve drafting shards.
       return positiveInt('ORG_DASHBOARDS_CONCURRENCY', 1, 2);
     case 'maintenance':
+      return 1;
+    case 'auto_campaign':
       return 1;
   }
 }
