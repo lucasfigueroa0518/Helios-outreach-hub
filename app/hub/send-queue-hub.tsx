@@ -327,7 +327,7 @@ export function SendQueueHub({
   const waitingFailed = waitingItems.filter((item) => item.status === 'failed').length;
   const backlogCount = waitingQueued + waitingSending + waitingFailed;
   const todayBucket = data?.days.find((day) => day.schedule_date === data.today) ?? null;
-  const inboxCount = data?.inboxes.length ?? 0;
+  const inboxCount = data?.inboxes?.length ?? 0;
   const capPerInbox = data?.daily_inbox_cap ?? 10;
   const slotCapacity = capPerInbox * Math.max(1, inboxCount);
 
