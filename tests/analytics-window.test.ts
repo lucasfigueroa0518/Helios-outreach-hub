@@ -43,3 +43,19 @@ test('attributed spend UNION does not read lead_cost_events', async () => {
   assert.match(ATTRIBUTED_COST_UNION_SQL, /extraction_summary/);
   assert.match(ATTRIBUTED_COST_UNION_SQL, /context_updates/);
 });
+
+test('spend unit costs use drafted leads and drafting jobs, not roster size or event rows', async () => {
+  const { computeSpendUnitCosts } = await import('@/lib/analytics');
+  const units = computeSpendUnitCosts({
+    total_spend_usd: 50,
+    drafting_cost_usd: 42,
+    unattributed_cost_usd: 2,
+    enrichment_cost_usd: 8,
+    drafted_leads: 10,
+    drafting_jobs: 20,
+    enrichment_jobs: 4,
+  });
+  assert.equal(units.spend_per_lead_usd, 5);
+  assert.equal(units.cost_per_drafting_usd, 2);
+  assert.equal(units.cost_per_enrichment_usd, 2);
+});

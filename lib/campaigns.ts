@@ -158,7 +158,8 @@ const campaignSelect = `
   FROM outreach.campaigns c
   LEFT JOIN outreach.campaign_leads cl ON cl.campaign_id = c.id
   LEFT JOIN outreach.runs r ON r.campaign_id = c.id
-  WHERE c.owner_id = $1`;
+  WHERE c.owner_id = $1
+     OR (COALESCE(c.kind, 'manual') = 'auto' AND c.status = 'active')`;
 
 export async function listCampaigns(ownerId: string): Promise<Campaign[]> {
   const { rows } = await dbQuery<CampaignQueryRow>(
@@ -308,7 +309,8 @@ export async function updateCampaign(
               ELSE next_cycle_at
             END,
             updated_at = now()
-      WHERE id = $1 AND owner_id = $2`,
+      WHERE id = $1
+        AND (owner_id = $2 OR COALESCE(kind, 'manual') = 'auto')`,
     [campaignId, ownerId, name ?? null, values.status ?? null],
   );
   if (!rowCount) return null;
@@ -389,7 +391,8 @@ export async function updateAutoCampaign(
             thin_days = CASE WHEN $8 THEN 0 ELSE thin_days END,
             next_cycle_at = $9,
             updated_at = now()
-      WHERE id = $1 AND owner_id = $2`,
+      WHERE id = $1
+        AND (owner_id = $2 OR COALESCE(kind, 'manual') = 'auto')`,
     [
       campaignId,
       ownerId,

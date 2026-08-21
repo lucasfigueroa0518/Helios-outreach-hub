@@ -9,7 +9,7 @@ import {
   SENDER_IDENTITY_DEFAULTS,
   type SenderIdentitySlug,
 } from '@/lib/agentmail-inboxes';
-import { assertCampaignOwner } from '@/lib/auth';
+import { assertCampaignOwner, sqlCampaignAccessible } from '@/lib/auth';
 import { formatEmailStatus } from '@/lib/campaign-sheet';
 import { dbQuery, dbTransaction } from '@/lib/db';
 import { loadDraftingAssets } from '@/lib/drafting/assets';
@@ -394,7 +394,7 @@ async function getOwnedWorkspace(
             w.paused_at
      FROM outreach.drafting_workspaces w
      JOIN outreach.campaigns c ON c.id = w.campaign_id
-     WHERE w.campaign_id = $1 AND c.owner_id = $2`,
+     WHERE w.campaign_id = $1 AND ${sqlCampaignAccessible('c', '$2')}`,
     [campaignId, ownerId],
   );
   return rows[0] ?? null;
@@ -409,7 +409,7 @@ async function getOwnedItemContext(
      FROM outreach.drafting_items i
      JOIN outreach.drafting_workspaces w ON w.id = i.workspace_id
      JOIN outreach.campaigns c ON c.id = w.campaign_id
-     WHERE i.id = $1 AND c.owner_id = $2`,
+     WHERE i.id = $1 AND ${sqlCampaignAccessible('c', '$2')}`,
     [itemId, ownerId],
   );
   const row = rows[0];
@@ -1918,7 +1918,8 @@ export async function startDraftingWorkspace(
   await assertCampaignOwned(campaignId, ownerId);
 
   const campaign = await dbQuery<{ id: string; status: string; name: string }>(
-    `SELECT id, status, name FROM outreach.campaigns WHERE id = $1 AND owner_id = $2`,
+    `SELECT id, status, name FROM outreach.campaigns
+      WHERE id = $1 AND (owner_id = $2 OR COALESCE(kind, 'manual') = 'auto')`,
     [campaignId, ownerId],
   );
   if (!campaign.rows[0]) throw new DraftingNotFoundError('Campaign not found');
@@ -4947,7 +4948,7 @@ export async function pauseDraftingWorkspace(
          FROM outreach.drafting_workspaces w
          JOIN outreach.campaigns c ON c.id = w.campaign_id
         WHERE w.campaign_id = $1
-          AND c.owner_id = $2
+          AND ${sqlCampaignAccessible('c', '$2')}
         FOR UPDATE OF w`,
       [campaignId, ownerId],
     );
@@ -5060,7 +5061,7 @@ export async function resumeDraftingWorkspace(
          FROM outreach.drafting_workspaces w
          JOIN outreach.campaigns c ON c.id = w.campaign_id
         WHERE w.campaign_id = $1
-          AND c.owner_id = $2
+          AND ${sqlCampaignAccessible('c', '$2')}
         FOR UPDATE OF w`,
       [campaignId, ownerId],
     );
@@ -5108,7 +5109,7 @@ export async function cancelDraftingRun(
          FROM outreach.drafting_workspaces w
          JOIN outreach.campaigns c ON c.id = w.campaign_id
         WHERE w.campaign_id = $1
-          AND c.owner_id = $2
+          AND ${sqlCampaignAccessible('c', '$2')}
         FOR UPDATE OF w`,
       [campaignId, ownerId],
     );

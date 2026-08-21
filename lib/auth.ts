@@ -1,6 +1,11 @@
 import { dbQuery } from '@/lib/db';
 import { displayNameFromEmail } from '@/lib/login-policy';
 
+/** Owner-scoped lists, or any Auto campaign (shared across signed-in Helios users). */
+export function sqlCampaignAccessible(alias: string, ownerSql: string): string {
+  return `(${alias}.owner_id = ${ownerSql} OR COALESCE(${alias}.kind, 'manual') = 'auto')`;
+}
+
 export type OutreachUser = {
   id: string;
   email: string;
@@ -37,10 +42,15 @@ export async function upsertUserByEmail(email: string): Promise<OutreachUser> {
   return created.rows[0];
 }
 
-/** Verify a campaign belongs to the session user before touching child rows. */
+/** Verify the session user may read/mutate this campaign (owner, or any Auto campaign). */
 export async function assertCampaignOwner(campaignId: string, ownerId: string): Promise<boolean> {
   const { rows } = await dbQuery<{ id: string }>(
-    `SELECT id FROM outreach.campaigns WHERE id = $1 AND owner_id = $2`,
+    `SELECT id FROM outreach.campaigns
+      WHERE id = $1
+        AND (
+          owner_id = $2
+          OR COALESCE(kind, 'manual') = 'auto'
+        )`,
     [campaignId, ownerId],
   );
   return rows.length > 0;

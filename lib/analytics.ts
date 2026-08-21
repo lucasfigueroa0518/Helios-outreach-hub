@@ -4,9 +4,8 @@
 
 import { SENDER_IDENTITY_DEFAULTS } from '@/lib/agentmail-inboxes';
 import {
-  completeUtcDaysInWindow,
-  loadAnthropicBilledUsd,
   loadAttributedCostRows,
+  loadDraftingSpendDenominators,
 } from '@/lib/analytics-attributed-cost';
 import { getCloudWorkerSpendState } from '@/lib/billing-guard';
 import { dbQuery } from '@/lib/db';
@@ -57,6 +56,8 @@ export type AnalyticsMetricBlock = {
   cost_per_drafting_usd: number | null;
   enrichment_lead_events: number;
   drafting_lead_events: number;
+  drafted_leads: number;
+  drafting_jobs: number;
 
   // Orchestration Jobs
   orch_jobs_total: number;
@@ -126,15 +127,6 @@ export type CloudWorkerSpendSummary = {
   detail: string | null;
 };
 
-export type AnthropicSpendReconciliation = {
-  billed_usd: number;
-  attributed_usd: number;
-  variance_usd: number;
-  billed_from_day: string | null;
-  billed_to_day: string | null;
-  today_incomplete: boolean;
-};
-
 export type AnalyticsSummary = {
   window: AnalyticsWindow;
   filters: {
@@ -148,7 +140,6 @@ export type AnalyticsSummary = {
   available_inboxes: { email: string; identity_slug: string }[];
   aggregate: AnalyticsMetricBlock;
   cloud_worker_spend: CloudWorkerSpendSummary;
-  anthropic_spend: AnthropicSpendReconciliation;
   by_user: AnalyticsUserRow[];
   by_identity: AnalyticsIdentityRow[];
   by_campaign: AnalyticsCampaignRow[];
@@ -212,6 +203,8 @@ function emptyMetrics(): AnalyticsMetricBlock {
     cost_per_drafting_usd: null,
     enrichment_lead_events: 0,
     drafting_lead_events: 0,
+    drafted_leads: 0,
+    drafting_jobs: 0,
     orch_jobs_total: 0,
     orch_jobs_retried: 0,
     retry_rate: null,
@@ -245,9 +238,39 @@ function attributedSpendUsd(m: Pick<
   );
 }
 
+export function computeSpendUnitCosts(m: {
+  total_spend_usd: number;
+  drafting_cost_usd: number;
+  unattributed_cost_usd: number;
+  enrichment_cost_usd: number;
+  drafted_leads: number;
+  drafting_jobs: number;
+  enrichment_jobs: number;
+}): {
+  spend_per_lead_usd: number | null;
+  cost_per_drafting_usd: number | null;
+  cost_per_enrichment_usd: number | null;
+} {
+  const attributedDrafting = Math.max(0, m.drafting_cost_usd - m.unattributed_cost_usd);
+  return {
+    spend_per_lead_usd: perUnit(m.total_spend_usd, m.drafted_leads),
+    cost_per_drafting_usd: perUnit(attributedDrafting, m.drafting_jobs),
+    cost_per_enrichment_usd: perUnit(m.enrichment_cost_usd, m.enrichment_jobs),
+  };
+}
+
 function finalizeMetrics<T extends AnalyticsMetricBlock>(m: T): T {
   const total_spend = attributedSpendUsd(m);
   const baseDenominator = m.emails_delivered > 0 ? m.emails_delivered : m.emails_sent;
+  const units = computeSpendUnitCosts({
+    total_spend_usd: total_spend,
+    drafting_cost_usd: m.drafting_cost_usd,
+    unattributed_cost_usd: m.unattributed_cost_usd,
+    enrichment_cost_usd: m.enrichment_cost_usd,
+    drafted_leads: m.drafted_leads,
+    drafting_jobs: m.drafting_jobs,
+    enrichment_jobs: m.enrichment_lead_events,
+  });
   return {
     ...m,
     total_spend_usd: total_spend,
@@ -256,11 +279,11 @@ function finalizeMetrics<T extends AnalyticsMetricBlock>(m: T): T {
     open_rate: rate(m.emails_opened, baseDenominator),
     click_rate: rate(m.emails_clicked, baseDenominator),
     reply_rate: rate(m.emails_replied, baseDenominator),
-    spend_per_lead_usd: perUnit(total_spend, m.total_leads),
+    spend_per_lead_usd: units.spend_per_lead_usd,
     approval_rate: rate(m.drafts_approved, m.drafts_reviewed),
     cost_per_email_usd: perUnit(total_spend, m.emails_sent),
-    cost_per_enrichment_usd: perUnit(m.enrichment_cost_usd, m.enrichment_lead_events),
-    cost_per_drafting_usd: perUnit(m.drafting_cost_usd, m.drafting_lead_events),
+    cost_per_enrichment_usd: units.cost_per_enrichment_usd,
+    cost_per_drafting_usd: units.cost_per_drafting_usd,
     retry_rate: rate(m.orch_jobs_retried, m.orch_jobs_total),
     edit_rate: rate(m.drafts_revised, Math.max(m.drafts_reviewed, m.drafts_revised)),
   };
@@ -497,6 +520,12 @@ export async function getAnalyticsSummary(input: {
     excludedLeadIds: excludedLeadList,
     excludedRunIds: excludedRunIds,
   });
+  const draftingDenominators = await loadDraftingSpendDenominators({
+    from: window.from,
+    to: window.to,
+    campaignIds: safeCampaignIds,
+    excludedLeadIds: excludedLeadList,
+  });
 
   // 5. Orchestration Job Statistics
   const { rows: jobRows } = await dbQuery<{
@@ -540,6 +569,8 @@ export async function getAnalyticsSummary(input: {
     drafting_cost_usd: number;
     reply_cost_usd: number;
     extraction_cost_usd: number;
+    drafted_leads: number;
+    drafting_jobs: number;
   }>();
 
   function emptyCampaignMetrics() {
@@ -554,6 +585,8 @@ export async function getAnalyticsSummary(input: {
       drafting_cost_usd: 0,
       reply_cost_usd: 0,
       extraction_cost_usd: 0,
+      drafted_leads: 0,
+      drafting_jobs: 0,
     };
   }
 
@@ -653,7 +686,6 @@ export async function getAnalyticsSummary(input: {
 
   for (const row of costRows) {
     const cost = Number(row.cost_usd);
-    const events = Number(row.event_count);
     const unattributedCost = Number(row.unattributed_cost_usd);
     const user = row.user_id ? ensureUser(byUser, row.user_id) : null;
     const cm = row.campaign_id
@@ -701,12 +733,26 @@ export async function getAnalyticsSummary(input: {
     } else {
       user.drafting_cost_usd += cost;
       user.unattributed_cost_usd += unattributedCost;
-      user.drafting_lead_events += events;
       aggregate.drafting_cost_usd += cost;
       aggregate.unattributed_cost_usd += unattributedCost;
-      aggregate.drafting_lead_events += events;
       cm.drafting_cost_usd += cost;
     }
+    campaignMetrics.set(row.campaign_id, cm);
+  }
+
+  for (const row of draftingDenominators) {
+    const jobs = Number(row.drafting_jobs);
+    const leads = Number(row.drafted_leads);
+    const user = ensureUser(byUser, row.user_id);
+    const cm = campaignMetrics.get(row.campaign_id) ?? emptyCampaignMetrics();
+    user.drafting_jobs += jobs;
+    user.drafting_lead_events += jobs;
+    user.drafted_leads += leads;
+    aggregate.drafting_jobs += jobs;
+    aggregate.drafting_lead_events += jobs;
+    aggregate.drafted_leads += leads;
+    cm.drafting_jobs += jobs;
+    cm.drafted_leads += leads;
     campaignMetrics.set(row.campaign_id, cm);
   }
 
@@ -760,7 +806,7 @@ export async function getAnalyticsSummary(input: {
       reply_cost_usd: cm.reply_cost_usd,
       extraction_cost_usd: cm.extraction_cost_usd,
       total_spend_usd: totalSpend,
-      spend_per_lead_usd: perUnit(totalSpend, leadCount),
+      spend_per_lead_usd: perUnit(totalSpend, cm.drafted_leads),
       created_at: camp.created_at ? new Date(camp.created_at).toISOString() : new Date().toISOString(),
     };
   });
@@ -775,24 +821,6 @@ export async function getAnalyticsSummary(input: {
   };
 
   const finalizedAggregate = finalizeMetrics(aggregate);
-  const billedDays = completeUtcDaysInWindow(window);
-  let billedUsd = 0;
-  try {
-    billedUsd = billedDays
-      ? await loadAnthropicBilledUsd(billedDays.fromDay, billedDays.toDay)
-      : 0;
-  } catch {
-    billedUsd = 0;
-  }
-  const todayUtc = new Date().toISOString().slice(0, 10);
-  const anthropic_spend: AnthropicSpendReconciliation = {
-    billed_usd: billedUsd,
-    attributed_usd: finalizedAggregate.total_spend_usd,
-    variance_usd: billedUsd - finalizedAggregate.total_spend_usd,
-    billed_from_day: billedDays?.fromDay ?? null,
-    billed_to_day: billedDays?.toDay ?? null,
-    today_incomplete: window.to.slice(0, 10) >= todayUtc,
-  };
 
   return {
     window,
@@ -818,7 +846,6 @@ export async function getAnalyticsSummary(input: {
     ],
     aggregate: finalizedAggregate,
     cloud_worker_spend,
-    anthropic_spend,
     by_user: [...byUser.values()]
       .map((row) => finalizeMetrics(row))
       .sort((a, b) => b.total_spend_usd - a.total_spend_usd),
@@ -840,10 +867,10 @@ export async function getAnalyticsSummary(input: {
       'Sent count uses drafting_items.delivery_snapshot and email_sends (sent status).',
       'Denied proxy = rewrite-path drafting item states (queued_rewrite / rewriting / failed_rewrite).',
       'Excluded runs drop leads via campaign_leads.run_id and leads.source_run_id.',
-      'Drafting totals include immutable legacy_unattributed opening balances; per-lead counts never receive that historical residual.',
-      'Hub attributed Claude is a UNION of work rows (drafting events, company research jobs, reply drafts, extraction, dashboard summaries). Shared company research jobs count once in org total and under every intersecting campaign when filtered.',
-      'Anthropic billed is org/day from the Cost API over complete UTC days only — it does not split by campaign. Today may lag ~5 minutes and is excluded from billed.',
-      'Variance = billed − attributed. Typical causes: unrecorded calls, Playground usage, Cost API lag, incomplete UTC day, or campaign filters on attributed only.',
+      'Hub spend is recorded Claude usage on drafting jobs, company research, replies, extraction, and dashboard summaries.',
+      'Spend per lead divides hub spend by distinct leads that had a paid drafting job in this window — not the full campaign roster.',
+      'Avg drafting job divides paid drafting events (excluding leftover run opening balances) by distinct drafting_jobs.',
+      'Shared company research jobs count once in org total and under every intersecting campaign when filtered.',
       'Cloud worker (GCP) is project billable spend from budget notifications — infra cost, not attributed per campaign/lead.',
     ],
   };

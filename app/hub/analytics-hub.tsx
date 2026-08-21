@@ -473,41 +473,23 @@ export function AnalyticsHub() {
 
                 <div className="analytics-hub__stats" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                   <DrillableTile
-                    label="Anthropic billed"
-                    value={formatUsd(summary?.anthropic_spend.billed_usd)}
-                    sub={
-                      summary?.anthropic_spend.billed_from_day
-                        ? `Complete UTC days ${summary.anthropic_spend.billed_from_day} → ${summary.anthropic_spend.billed_to_day}`
-                        : 'No complete UTC days in this window'
-                    }
-                    metricKey="anthropic_billed"
-                    onClick={() => setDrilldownMetricKey('anthropic_billed')}
-                  />
-                  <DrillableTile
-                    label="Hub attributed"
-                    value={formatUsd(summary?.anthropic_spend.attributed_usd ?? metrics.total_spend_usd)}
-                    sub="Work-row UNION (not GCP)"
-                    metricKey="hub_attributed"
-                    onClick={() => setDrilldownMetricKey('hub_attributed')}
-                  />
-                  <DrillableTile
-                    label="Variance"
-                    value={formatUsd(summary?.anthropic_spend.variance_usd)}
-                    sub="Billed − attributed"
-                    metricKey="spend_variance"
-                    onClick={() => setDrilldownMetricKey('spend_variance')}
+                    label="Hub spend"
+                    value={formatUsd(metrics.total_spend_usd)}
+                    sub="Recorded Claude on Hub work"
+                    metricKey="hub_spend"
+                    onClick={() => setDrilldownMetricKey('hub_spend')}
                   />
                   <DrillableTile
                     label="Spend per lead"
                     value={formatUsd(metrics.spend_per_lead_usd)}
-                    sub={`Across ${metrics.total_leads} leads`}
+                    sub={`${metrics.drafted_leads} drafted leads`}
                     metricKey="spend_per_lead"
                     onClick={() => setDrilldownMetricKey('spend_per_lead')}
                   />
                   <DrillableTile
-                    label="Total spend / drafting"
+                    label="Avg drafting job"
                     value={formatUsd(metrics.cost_per_drafting_usd)}
-                    sub={`${metrics.drafting_lead_events} drafting events`}
+                    sub={`${metrics.drafting_jobs} paid jobs`}
                     metricKey="cost_per_drafting"
                     onClick={() => setDrilldownMetricKey('cost_per_drafting')}
                   />
@@ -519,25 +501,18 @@ export function AnalyticsHub() {
                     onClick={() => setDrilldownMetricKey('cost_per_enrichment')}
                   />
                   <DrillableTile
-                    label="Aggregated drafting"
+                    label="Drafting total"
                     value={formatUsd(metrics.drafting_cost_usd)}
-                    sub="Total LLM drafting cost"
+                    sub="All paid drafting jobs"
                     metricKey="aggregated_drafting"
                     onClick={() => setDrilldownMetricKey('aggregated_drafting')}
                   />
                   <DrillableTile
-                    label="Aggregated enrichment"
+                    label="Enrichment total"
                     value={formatUsd(metrics.enrichment_cost_usd)}
                     sub="Company research jobs"
                     metricKey="aggregated_enrichment"
                     onClick={() => setDrilldownMetricKey('aggregated_enrichment')}
-                  />
-                  <DrillableTile
-                    label="Total spend"
-                    value={formatUsd(metrics.total_spend_usd)}
-                    sub="Attributed Claude (not GCP)"
-                    metricKey="total_spend"
-                    onClick={() => setDrilldownMetricKey('total_spend')}
                   />
                   <div className="analytics-stat">
                     <span className="analytics-stat__label">Cloud worker (GCP)</span>

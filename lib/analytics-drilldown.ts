@@ -4,12 +4,9 @@
  */
 
 import {
-  completeUtcDaysInWindow,
-  loadAnthropicBilledBreakdown,
-  loadAnthropicBilledByModel,
-  loadAnthropicBilledDaily,
   loadAttributedCostByCampaign,
   loadAttributedCostDaily,
+  loadDraftingSpendDenominators,
 } from '@/lib/analytics-attributed-cost';
 import { dbQuery } from '@/lib/db';
 import { resolveAnalyticsWindow } from '@/lib/analytics';
@@ -139,12 +136,9 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
 
   const campaignIds = matchingCampaigns.map((c) => c.id);
   const safeCampaignIds = campaignIds.length ? campaignIds : ['00000000-0000-0000-0000-000000000000'];
-  const metricKey = input.metricKey || 'total_spend';
-  const billedDays = completeUtcDaysInWindow(window);
-
-  if (metricKey === 'anthropic_billed' || metricKey === 'spend_variance') {
-    return billedDrilldown(metricKey, window, billedDays, safeCampaignIds, excludedLeads, excludedRunIds);
-  }
+  const metricKey = input.metricKey === 'hub_attributed' || input.metricKey === 'total_spend'
+    ? 'hub_spend'
+    : (input.metricKey || 'hub_spend');
 
   let title = 'Statistic Overview';
   let unit: 'usd' | 'percent' | 'count' = 'usd';
@@ -206,7 +200,7 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     const draftC = Number(r.drafting_cost);
     const enrichC = Number(r.enrichment_cost);
     let val = 0;
-    if (metricKey === 'spend_per_lead' || metricKey === 'total_spend' || metricKey === 'hub_attributed') val = totalC;
+    if (metricKey === 'spend_per_lead' || metricKey === 'hub_spend') val = totalC;
     else if (metricKey === 'cost_per_drafting' || metricKey === 'aggregated_drafting') val = draftC;
     else if (metricKey === 'cost_per_enrichment' || metricKey === 'aggregated_enrichment') val = enrichC;
     else if (metricKey === 'delivery_rate') val = sent > 0 ? deliv / sent : 0;
@@ -218,7 +212,7 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     return { date: r.day, value: val };
   });
 
-  const [campRows, costByCampaign] = await Promise.all([
+  const [campRows, costByCampaign, draftingDenominators] = await Promise.all([
     dbQuery<{
       campaign_id: string;
       campaign_name: string;
@@ -252,9 +246,16 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
       excludedLeadIds: excludedLeads,
       excludedRunIds,
     }),
+    loadDraftingSpendDenominators({
+      from: window.from,
+      to: window.to,
+      campaignIds: safeCampaignIds,
+      excludedLeadIds: excludedLeads,
+    }),
   ]);
 
   const costMap = new Map(costByCampaign.map((row) => [row.campaign_id, row]));
+  const draftingMap = new Map(draftingDenominators.map((row) => [row.campaign_id, row]));
 
   const campaigns: DrilldownCampaignRow[] = campRows.rows.map((r) => {
     const lCount = Number(r.lead_count);
@@ -269,20 +270,22 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     const repliesC = Number(cost?.replies_cost ?? 0);
     const extractC = Number(cost?.extraction_cost ?? 0);
     const enrichJobs = Number(cost?.enrichment_jobs ?? 0);
+    const draftedLeads = Number(draftingMap.get(r.campaign_id)?.drafted_leads ?? 0);
+    const draftingJobs = Number(draftingMap.get(r.campaign_id)?.drafting_jobs ?? 0);
     const totalS = enrichC + draftC + repliesC + extractC;
 
     let val = 0;
     let fmt = '—';
 
     if (metricKey === 'spend_per_lead') {
-      title = 'Spend Per Lead';
+      title = 'Spend Per Drafted Lead';
       unit = 'usd';
-      val = lCount > 0 ? totalS / lCount : 0;
+      val = draftedLeads > 0 ? totalS / draftedLeads : 0;
       fmt = formatUsd(val);
     } else if (metricKey === 'cost_per_drafting') {
-      title = 'Cost Per Drafting Item';
+      title = 'Average Drafting Job';
       unit = 'usd';
-      val = sent > 0 ? draftC / sent : 0;
+      val = draftingJobs > 0 ? draftC / draftingJobs : 0;
       fmt = formatUsd(val);
     } else if (metricKey === 'cost_per_enrichment') {
       title = 'Cost Per Enrichment';
@@ -299,8 +302,8 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
       unit = 'usd';
       val = enrichC;
       fmt = formatUsd(val);
-    } else if (metricKey === 'total_spend' || metricKey === 'hub_attributed') {
-      title = metricKey === 'hub_attributed' ? 'Hub Attributed Claude' : 'Total Campaign Spend';
+    } else if (metricKey === 'hub_spend') {
+      title = 'Hub Spend';
       unit = 'usd';
       val = totalS;
       fmt = formatUsd(val);
@@ -344,13 +347,14 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
       campaign_name: r.campaign_name,
       metric_value: val,
       formatted_value: fmt,
-      lead_count: lCount,
+      lead_count: draftedLeads || lCount,
       emails_sent: sent,
       total_spend_usd: totalS,
     };
   }).sort((a, b) => b.metric_value - a.metric_value);
 
-  const totalLeads = campRows.rows.reduce((acc, r) => acc + Number(r.lead_count), 0);
+  const totalDraftedLeads = draftingDenominators.reduce((acc, r) => acc + Number(r.drafted_leads), 0);
+  const totalDraftingJobs = draftingDenominators.reduce((acc, r) => acc + Number(r.drafting_jobs), 0);
   const totalSent = campRows.rows.reduce((acc, r) => acc + Number(r.emails_sent), 0);
   const totalDelivered = campRows.rows.reduce((acc, r) => acc + Number(r.emails_delivered), 0);
   const totalOpened = campRows.rows.reduce((acc, r) => acc + Number(r.emails_opened), 0);
@@ -365,16 +369,16 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
   const totalSpend = totalEnrichmentCost + totalDraftingCost + totalReplyCost + totalExtractionCost + dashboardCost;
 
   if (metricKey === 'spend_per_lead') {
-    totalFormatted = totalLeads > 0 ? formatUsd(totalSpend / totalLeads) : '$0.00';
+    totalFormatted = totalDraftedLeads > 0 ? formatUsd(totalSpend / totalDraftedLeads) : '$0.00';
   } else if (metricKey === 'cost_per_drafting') {
-    totalFormatted = totalSent > 0 ? formatUsd(totalDraftingCost / totalSent) : '$0.00';
+    totalFormatted = totalDraftingJobs > 0 ? formatUsd(totalDraftingCost / totalDraftingJobs) : '$0.00';
   } else if (metricKey === 'cost_per_enrichment') {
     totalFormatted = totalEnrichmentJobs > 0 ? formatUsd(totalEnrichmentCost / totalEnrichmentJobs) : '$0.00';
   } else if (metricKey === 'aggregated_drafting') {
     totalFormatted = formatUsd(totalDraftingCost);
   } else if (metricKey === 'aggregated_enrichment') {
     totalFormatted = formatUsd(totalEnrichmentCost);
-  } else if (metricKey === 'total_spend' || metricKey === 'hub_attributed') {
+  } else if (metricKey === 'hub_spend') {
     totalFormatted = formatUsd(totalSpend);
   } else if (metricKey === 'delivery_rate') {
     totalFormatted = totalSent > 0 ? formatPct(totalDelivered / totalSent) : '—';
@@ -461,106 +465,9 @@ export async function getMetricDrilldown(input: AnalyticsDrilldownInput): Promis
     campaigns,
     items,
     notes: [
-      'Attributed Claude is a UNION of drafting events, company research jobs, reply drafts, extraction, and dashboard summaries.',
-      'Shared company research jobs appear under every intersecting campaign; org totals count each job once.',
+      'Hub spend is recorded Claude usage on drafting jobs, company research, replies, extraction, and dashboard summaries.',
+      'Spend per lead uses distinct leads with a paid drafting job in this window.',
+      'Avg drafting job uses distinct drafting_jobs with a paid cost event.',
     ],
-  };
-}
-
-async function billedDrilldown(
-  metricKey: string,
-  window: { from: string; to: string },
-  billedDays: { fromDay: string; toDay: string } | null,
-  safeCampaignIds: string[],
-  excludedLeads: string[],
-  excludedRunIds: string[],
-): Promise<AnalyticsDrilldownData> {
-  const isVariance = metricKey === 'spend_variance';
-  const title = isVariance ? 'Billed − Attributed Variance' : 'Anthropic Billed (Cost API)';
-  const notes = [
-    'Billed totals come from Anthropic Cost API daily buckets (complete UTC days only).',
-    'Today is excluded because the current UTC day is incomplete and Cost API can lag ~5 minutes.',
-    'Billed is org-wide and does not split by campaign. Playground and unrecorded calls show up here only.',
-  ];
-
-  if (!billedDays) {
-    return {
-      metricKey,
-      title,
-      unit: 'usd',
-      totalFormatted: '$0.00',
-      trend: [],
-      campaigns: [],
-      items: [],
-      notes: [...notes, 'No complete UTC days in this window yet.'],
-    };
-  }
-
-  const [billedDaily, billedByModel, billedItems, attributedDaily] = await Promise.all([
-    loadAnthropicBilledDaily(billedDays.fromDay, billedDays.toDay),
-    loadAnthropicBilledByModel(billedDays.fromDay, billedDays.toDay),
-    loadAnthropicBilledBreakdown(billedDays.fromDay, billedDays.toDay),
-    isVariance
-      ? loadAttributedCostDaily({
-          from: window.from,
-          to: window.to,
-          campaignIds: safeCampaignIds,
-          excludedLeadIds: excludedLeads,
-          excludedRunIds,
-        })
-      : Promise.resolve([]),
-  ]);
-
-  const billedByDay = new Map(billedDaily.map((r) => [r.day, Number(r.billed)]));
-  const attributedByDay = new Map(
-    attributedDaily.map((r) => [r.day, attributedDayTotal(r)]),
-  );
-
-  const trendDays: string[] = [];
-  for (let d = new Date(`${billedDays.fromDay}T00:00:00.000Z`); d.toISOString().slice(0, 10) <= billedDays.toDay; d.setUTCDate(d.getUTCDate() + 1)) {
-    trendDays.push(d.toISOString().slice(0, 10));
-  }
-
-  const trend: DailyTrendPoint[] = trendDays.map((day) => {
-    const billed = billedByDay.get(day) ?? 0;
-    const attributed = attributedByDay.get(day) ?? 0;
-    return { date: day, value: isVariance ? billed - attributed : billed };
-  });
-
-  const billedTotal = billedDaily.reduce((acc, r) => acc + Number(r.billed), 0);
-  const attributedTotal = attributedDaily.reduce((acc, r) => acc + attributedDayTotal(r), 0);
-  const total = isVariance ? billedTotal - attributedTotal : billedTotal;
-
-  const campaigns: DrilldownCampaignRow[] = billedByModel.map((row) => ({
-    campaign_id: row.model,
-    campaign_name: row.model,
-    metric_value: Number(row.amount_usd),
-    formatted_value: formatUsd(Number(row.amount_usd)),
-    lead_count: 0,
-    emails_sent: 0,
-    total_spend_usd: Number(row.amount_usd),
-  }));
-
-  const items: DrilldownItemRow[] = billedItems.map((row, index) => ({
-    id: `${row.day}:${row.model ?? ''}:${row.token_type ?? ''}:${index}`,
-    lead_name: row.token_type || '(no token type)',
-    lead_company: row.model,
-    lead_email: null,
-    campaign_name: row.model || '(unspecified model)',
-    status_or_event: row.cost_type || 'tokens',
-    cost_usd: Number(row.amount_usd),
-    occurred_at: `${row.day}T00:00:00.000Z`,
-    details: row.description,
-  }));
-
-  return {
-    metricKey,
-    title,
-    unit: 'usd',
-    totalFormatted: formatUsd(total),
-    trend,
-    campaigns,
-    items,
-    notes,
   };
 }

@@ -954,10 +954,10 @@ export async function listSendQueue(input: {
     }));
 
   const reservationsByDate = new Map<string, QueueDayBucket['reservations']>();
-  if (input.ownerId && !input.campaignId) {
+  if (!input.campaignId) {
     const { loadLiveAutoReservationSources } = await import('@/lib/auto-campaigns/repository');
     const { computeAutoReservations } = await import('@/lib/auto-campaigns/reservations');
-    const sources = await loadLiveAutoReservationSources(input.ownerId);
+    const sources = await loadLiveAutoReservationSources();
     const locks = computeAutoReservations({
       today,
       from: input.from,

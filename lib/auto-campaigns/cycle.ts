@@ -155,7 +155,7 @@ export async function runAutoCampaignCycle(campaignId: string): Promise<{
       loadKnownApolloIds(),
       loadKnownLinkedinUrls(),
     ]);
-    const queuedOrSent = await loadQueuedOrSentEmails(campaign.owner_id);
+    const queuedOrSent = await loadQueuedOrSentEmails();
 
     let page = campaign.apollo_search_page;
     let expansionStep = campaign.expansion_step;

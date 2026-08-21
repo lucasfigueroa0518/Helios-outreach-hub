@@ -84,11 +84,10 @@ export async function ownerHasReadySender(
   return slug === 'lucas' || slug === 'tommy';
 }
 
-export async function listUsedQueueColors(ownerId: string): Promise<string[]> {
+export async function listUsedQueueColors(_ownerId?: string): Promise<string[]> {
   const { rows } = await dbQuery<{ queue_color: string | null }>(
     `SELECT queue_color FROM outreach.campaigns
-      WHERE owner_id = $1 AND kind = 'auto' AND status = 'active' AND queue_color IS NOT NULL`,
-    [ownerId],
+      WHERE kind = 'auto' AND status = 'active' AND queue_color IS NOT NULL`,
   );
   return rows.flatMap((row) => row.queue_color ? [row.queue_color] : []);
 }
@@ -118,12 +117,11 @@ export async function loadKnownLinkedinUrls(): Promise<Set<string>> {
   return urls;
 }
 
-export async function loadQueuedOrSentEmails(ownerId: string): Promise<Set<string>> {
+export async function loadQueuedOrSentEmails(): Promise<Set<string>> {
   const { rows } = await dbQuery<{ to_email: string }>(
     `SELECT DISTINCT lower(to_email) AS to_email
        FROM outreach.email_send_queue
-      WHERE owner_id = $1 AND status IN ('queued', 'sending', 'sent')`,
-    [ownerId],
+      WHERE status IN ('queued', 'sending', 'sent')`,
   );
   return new Set(rows.map((row) => row.to_email));
 }
@@ -139,7 +137,7 @@ export async function loadAttachedOnNyDate(campaignId: string, sourcedOn: string
   return rows[0]?.n ?? 0;
 }
 
-export async function loadLiveAutoReservationSources(ownerId: string): Promise<Array<{
+export async function loadLiveAutoReservationSources(): Promise<Array<{
   campaignId: string;
   campaignName: string;
   emailsPerDay: number;
@@ -158,22 +156,19 @@ export async function loadLiveAutoReservationSources(ownerId: string): Promise<A
   }>(
     `SELECT id, name, emails_per_day, queue_color, lead_attributes, expansion_step
        FROM outreach.campaigns
-      WHERE owner_id = $1
-        AND kind = 'auto'
+      WHERE kind = 'auto'
         AND status = 'active'
         AND auto_status = 'live'`,
-    [ownerId],
   );
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);
   const counts = await dbQuery<{ campaign_id: string; schedule_date: string; n: number }>(
     `SELECT campaign_id::text, schedule_date::text, count(*)::int AS n
        FROM outreach.email_send_queue
-      WHERE owner_id = $1
-        AND campaign_id = ANY($2::uuid[])
+      WHERE campaign_id = ANY($1::uuid[])
         AND status IN ('queued', 'sending', 'sent')
       GROUP BY campaign_id, schedule_date`,
-    [ownerId, ids],
+    [ids],
   );
   const byCampaign = new Map<string, Record<string, number>>();
   for (const row of counts.rows) {

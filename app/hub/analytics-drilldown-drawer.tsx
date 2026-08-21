@@ -161,9 +161,7 @@ export function AnalyticsDrilldownDrawer({
                   onClick={() => setActiveTab('campaigns')}
                 >
                   <BarChart2 size={14} style={{ marginRight: '6px', display: 'inline-block', verticalAlign: 'middle' }} />
-                  {metricKey === 'anthropic_billed' || metricKey === 'spend_variance'
-                    ? `By Model (${data.campaigns.length})`
-                    : `By Campaign (${data.campaigns.length})`}
+                  {`By Campaign (${data.campaigns.length})`}
                 </button>
                 <button
                   type="button"
@@ -171,9 +169,7 @@ export function AnalyticsDrilldownDrawer({
                   onClick={() => setActiveTab('leads')}
                 >
                   <Users size={14} style={{ marginRight: '6px', display: 'inline-block', verticalAlign: 'middle' }} />
-                  {metricKey === 'anthropic_billed' || metricKey === 'spend_variance'
-                    ? `Day / token type (${data.items.length})`
-                    : `Lead & Email Rows (${data.items.length})`}
+                  {`Lead & Email Rows (${data.items.length})`}
                 </button>
               </div>
 

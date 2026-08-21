@@ -85,7 +85,7 @@ export const ATTRIBUTED_COST_UNION_SQL = `
   JOIN outreach.campaigns c ON c.id = r.campaign_id
   WHERE job.updated_at >= $1::timestamptz
     AND job.updated_at <= $2::timestamptz
-    AND job.actual_cost_usd IS NOT NULL
+    AND job.actual_cost_usd > 0
     AND c.id = ANY($3::uuid[])
     AND ($5::uuid[] IS NULL OR cardinality($5::uuid[]) = 0 OR run_id <> ALL($5::uuid[]))
   UNION ALL
@@ -104,6 +104,7 @@ export const ATTRIBUTED_COST_UNION_SQL = `
   WHERE event.created_at >= $1::timestamptz
     AND event.created_at <= $2::timestamptz
     AND c.id = ANY($3::uuid[])
+    AND event.actual_cost_usd > 0
     AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR item.lead_id <> ALL($4::uuid[]))
   UNION ALL
   SELECT
@@ -274,6 +275,45 @@ export async function loadAttributedCostByCampaign(input: {
       input.campaignIds,
       input.excludedLeadIds.length ? input.excludedLeadIds : null,
       input.excludedRunIds.length ? input.excludedRunIds : null,
+    ],
+  );
+  return rows;
+}
+
+export type DraftingSpendDenominatorRow = {
+  campaign_id: string;
+  user_id: string;
+  drafting_jobs: string;
+  drafted_leads: string;
+};
+
+/** Distinct paid drafting jobs and leads in the window — not cost-event rows or roster size. */
+export async function loadDraftingSpendDenominators(input: {
+  from: string;
+  to: string;
+  campaignIds: string[];
+  excludedLeadIds: string[];
+}): Promise<DraftingSpendDenominatorRow[]> {
+  const { rows } = await dbQuery<DraftingSpendDenominatorRow>(
+    `SELECT c.id::text AS campaign_id,
+            c.owner_id::text AS user_id,
+            count(DISTINCT event.drafting_job_id)::text AS drafting_jobs,
+            count(DISTINCT item.lead_id)::text AS drafted_leads
+       FROM outreach.drafting_job_cost_events event
+       JOIN outreach.drafting_items item ON item.id = event.drafting_item_id
+       JOIN outreach.drafting_workspaces workspace ON workspace.id = item.workspace_id
+       JOIN outreach.campaigns c ON c.id = workspace.campaign_id
+      WHERE event.created_at >= $1::timestamptz
+        AND event.created_at <= $2::timestamptz
+        AND event.actual_cost_usd > 0
+        AND c.id = ANY($3::uuid[])
+        AND ($4::uuid[] IS NULL OR cardinality($4::uuid[]) = 0 OR item.lead_id <> ALL($4::uuid[]))
+      GROUP BY c.id, c.owner_id`,
+    [
+      input.from,
+      input.to,
+      input.campaignIds,
+      input.excludedLeadIds.length ? input.excludedLeadIds : null,
     ],
   );
   return rows;

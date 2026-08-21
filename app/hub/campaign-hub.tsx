@@ -238,7 +238,7 @@ export function CampaignHub({ email }: { email: string }) {
         <div className="card__header">
           <div>
             <div className="card__title">Outreach Hub</div>
-            <div className="card__subtitle">Campaigns for {email}</div>
+            <div className="card__subtitle">Live Auto campaigns are shared · {email}</div>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <button
